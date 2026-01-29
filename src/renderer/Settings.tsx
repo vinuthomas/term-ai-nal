@@ -6,6 +6,7 @@ interface SettingsProps {
 }
 
 const Settings: React.FC<SettingsProps> = ({ onClose }) => {
+  const [activeTab, setActiveTab] = useState<'ai' | 'shortcuts'>('ai');
   const [provider, setProvider] = useState('openai');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
@@ -66,6 +67,26 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
   if (loading) return null;
 
+  const shortcuts = [
+    { category: 'AI', items: [
+      { keys: 'Cmd+Shift+P', description: 'Open AI Command Palette' },
+    ]},
+    { category: 'Pane Management', items: [
+      { keys: 'Cmd+\\', description: 'Split Right' },
+      { keys: 'Cmd+Shift+\\', description: 'Split Down' },
+      { keys: 'Cmd+Alt+\\', description: 'Split Left' },
+      { keys: 'Cmd+Shift+Alt+\\', description: 'Split Up' },
+      { keys: 'Cmd+W', description: 'Close Current Pane' },
+    ]},
+    { category: 'Navigation', items: [
+      { keys: 'Cmd+1...9', description: 'Jump to Pane by Number' },
+      { keys: 'Click', description: 'Focus Pane' },
+    ]},
+    { category: 'General', items: [
+      { keys: 'Escape', description: 'Close Overlays/Dialogs' },
+    ]},
+  ];
+
   return (
     <div style={styles.overlay}>
       <div style={styles.modal}>
@@ -73,8 +94,32 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
           <h2>Settings</h2>
           <button onClick={onClose} style={styles.closeBtn}><X size={20} /></button>
         </div>
-        
-        <form onSubmit={handleSave} style={styles.form}>
+
+        {/* Tabs */}
+        <div style={styles.tabs}>
+          <button
+            onClick={() => setActiveTab('ai')}
+            style={{
+              ...styles.tab,
+              ...(activeTab === 'ai' ? styles.tabActive : {})
+            }}
+          >
+            AI Settings
+          </button>
+          <button
+            onClick={() => setActiveTab('shortcuts')}
+            style={{
+              ...styles.tab,
+              ...(activeTab === 'shortcuts' ? styles.tabActive : {})
+            }}
+          >
+            Keyboard Shortcuts
+          </button>
+        </div>
+
+        {/* AI Settings Tab */}
+        {activeTab === 'ai' && (
+          <form onSubmit={handleSave} style={styles.form}>
           <div style={styles.group}>
             <label style={styles.label}>AI Provider</label>
             <select 
@@ -148,10 +193,33 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             </div>
           )}
 
-          <button type="submit" style={styles.saveBtn}>
-            <Save size={16} /> Save Settings
-          </button>
-        </form>
+            <button type="submit" style={styles.saveBtn}>
+              <Save size={16} /> Save Settings
+            </button>
+          </form>
+        )}
+
+        {/* Keyboard Shortcuts Tab */}
+        {activeTab === 'shortcuts' && (
+          <div style={styles.shortcutsContainer}>
+            {shortcuts.map((section, idx) => (
+              <div key={idx} style={styles.shortcutSection}>
+                <h3 style={styles.shortcutCategory}>{section.category}</h3>
+                {section.items.map((item, itemIdx) => (
+                  <div key={itemIdx} style={styles.shortcutRow}>
+                    <span style={styles.shortcutKeys}>{item.keys}</span>
+                    <span style={styles.shortcutDesc}>{item.description}</span>
+                  </div>
+                ))}
+              </div>
+            ))}
+            <div style={styles.shortcutNote}>
+              <small style={{ color: '#888' }}>
+                On Windows/Linux, use Ctrl instead of Cmd
+              </small>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -168,7 +236,9 @@ const styles: { [key: string]: React.CSSProperties } = {
     backgroundColor: '#252526',
     padding: '20px',
     borderRadius: '8px',
-    width: '400px',
+    width: '500px',
+    maxHeight: '80vh',
+    overflow: 'auto',
     boxShadow: '0 10px 25px rgba(0,0,0,0.5)',
     color: 'white',
   },
@@ -198,6 +268,66 @@ const styles: { [key: string]: React.CSSProperties } = {
     padding: '10px', borderRadius: '4px', cursor: 'pointer',
     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px',
     fontWeight: 'bold',
+  },
+  tabs: {
+    display: 'flex',
+    gap: '10px',
+    marginBottom: '20px',
+    borderBottom: '1px solid #3e3e42',
+  },
+  tab: {
+    background: 'none',
+    border: 'none',
+    color: '#aaa',
+    padding: '10px 15px',
+    cursor: 'pointer',
+    fontSize: '14px',
+    borderBottom: '2px solid transparent',
+    transition: 'all 0.2s',
+  },
+  tabActive: {
+    color: '#fff',
+    borderBottom: '2px solid #007acc',
+  },
+  shortcutsContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '20px',
+  },
+  shortcutSection: {
+    display: 'flex',
+    flexDirection: 'column',
+    gap: '8px',
+  },
+  shortcutCategory: {
+    fontSize: '14px',
+    color: '#007acc',
+    marginBottom: '5px',
+    fontWeight: 'bold',
+  },
+  shortcutRow: {
+    display: 'flex',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: '8px 10px',
+    backgroundColor: '#1e1e1e',
+    borderRadius: '4px',
+  },
+  shortcutKeys: {
+    fontFamily: 'monospace',
+    backgroundColor: '#3e3e42',
+    padding: '4px 8px',
+    borderRadius: '3px',
+    fontSize: '12px',
+    color: '#ddd',
+  },
+  shortcutDesc: {
+    fontSize: '13px',
+    color: '#ccc',
+  },
+  shortcutNote: {
+    marginTop: '10px',
+    textAlign: 'center',
   },
 };
 

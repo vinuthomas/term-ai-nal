@@ -275,20 +275,20 @@ const App: React.FC = () => {
           setActivePaneId(paneId);
         }
       }
-      // Split panes with directional control
-      if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
+      // Split panes with directional control (using backslash to avoid iTerm2 conflicts)
+      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
         e.preventDefault();
         if (e.shiftKey && e.altKey) {
-           // Cmd+Shift+Alt+D: split up
+           // Cmd+Shift+Alt+\: split up
            splitPane('vertical', 'before');
         } else if (e.shiftKey) {
-           // Cmd+Shift+D: split down
+           // Cmd+Shift+\: split down
            splitPane('vertical', 'after');
         } else if (e.altKey) {
-           // Cmd+Alt+D: split left
+           // Cmd+Alt+\: split left
            splitPane('horizontal', 'before');
         } else {
-           // Cmd+D: split right
+           // Cmd+\: split right
            splitPane('horizontal', 'after');
         }
       }
@@ -383,16 +383,16 @@ const App: React.FC = () => {
 
       {/* Toolbar */}
       <div style={styles.toolbar}>
-        <button onClick={() => splitPane('horizontal', 'after')} style={styles.toolBtn} title="Split Right (Cmd+D)">
+        <button onClick={() => splitPane('horizontal', 'after')} style={styles.toolBtn} title="Split Right (Cmd+\)">
             <ArrowRight size={18} color="#666" />
         </button>
-        <button onClick={() => splitPane('horizontal', 'before')} style={styles.toolBtn} title="Split Left (Cmd+Alt+D)">
+        <button onClick={() => splitPane('horizontal', 'before')} style={styles.toolBtn} title="Split Left (Cmd+Alt+\)">
             <ArrowLeft size={18} color="#666" />
         </button>
-        <button onClick={() => splitPane('vertical', 'after')} style={styles.toolBtn} title="Split Down (Cmd+Shift+D)">
+        <button onClick={() => splitPane('vertical', 'after')} style={styles.toolBtn} title="Split Down (Cmd+Shift+\)">
             <ArrowDown size={18} color="#666" />
         </button>
-        <button onClick={() => splitPane('vertical', 'before')} style={styles.toolBtn} title="Split Up (Cmd+Shift+Alt+D)">
+        <button onClick={() => splitPane('vertical', 'before')} style={styles.toolBtn} title="Split Up (Cmd+Shift+Alt+\)">
             <ArrowUp size={18} color="#666" />
         </button>
         <div style={styles.divider} />
