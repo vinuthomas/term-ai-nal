@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Settings as SettingsIcon, Loader, RefreshCw, Columns, Rows, X } from 'lucide-react';
+import { Settings as SettingsIcon, Loader, RefreshCw, Columns, Rows, X, ArrowRight, ArrowLeft, ArrowDown, ArrowUp } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from './ResizablePanels';
 import TerminalPane from './TerminalPane';
 import Settings from './Settings';
@@ -93,8 +93,8 @@ const App: React.FC = () => {
   }, []);
 
   // --- Layout Actions ---
-  
-  const splitPane = (direction: 'horizontal' | 'vertical') => {
+
+  const splitPane = (direction: 'horizontal' | 'vertical', position: 'before' | 'after' = 'after') => {
     const newPaneId = `term-${Date.now()}`;
     const newNodeId = `node-${Date.now()}`;
     const newPaneNode: LayoutNode = { id: newNodeId, type: 'pane', paneId: newPaneId };
@@ -114,13 +114,16 @@ const App: React.FC = () => {
       const { node, parent, index } = target;
 
       if (parent.direction === direction) {
-        parent.children!.splice(index + 1, 0, newPaneNode);
+        // Same direction - insert before or after current pane
+        const insertIndex = position === 'after' ? index + 1 : index;
+        parent.children!.splice(insertIndex, 0, newPaneNode);
       } else {
+        // Different direction - create new group
         const newGroup: LayoutNode = {
           id: `group-${Date.now()}`,
           type: 'group',
           direction: direction,
-          children: [node, newPaneNode]
+          children: position === 'after' ? [node, newPaneNode] : [newPaneNode, node]
         };
         parent.children![index] = newGroup;
       }
@@ -230,13 +233,21 @@ const App: React.FC = () => {
         e.preventDefault();
         setShowAiBar(true);
       }
-      // Split
+      // Split panes with directional control
       if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
         e.preventDefault();
-        if (e.shiftKey) {
-           splitPane('vertical'); 
+        if (e.shiftKey && e.altKey) {
+           // Cmd+Shift+Alt+D: split up
+           splitPane('vertical', 'before');
+        } else if (e.shiftKey) {
+           // Cmd+Shift+D: split down
+           splitPane('vertical', 'after');
+        } else if (e.altKey) {
+           // Cmd+Alt+D: split left
+           splitPane('horizontal', 'before');
         } else {
-           splitPane('horizontal'); 
+           // Cmd+D: split right
+           splitPane('horizontal', 'after');
         }
       }
       // Close Pane (Cmd+W)
@@ -244,7 +255,7 @@ const App: React.FC = () => {
         e.preventDefault();
         closePane(activePaneId);
       }
-      
+
       if (e.key === 'Escape') {
         setShowAiBar(false);
         setPendingCommand(null);
@@ -288,15 +299,24 @@ const App: React.FC = () => {
     }
 
     if (node.type === 'group' && node.children) {
+      const direction = node.direction || 'horizontal';
+      const handleStyle = direction === 'horizontal'
+        ? styles.resizeHandleHorizontal
+        : styles.resizeHandleVertical;
+
       return (
-        <PanelGroup key={node.id} direction={node.direction || 'horizontal'}>
+        <PanelGroup
+          key={node.id}
+          orientation={direction}
+          style={{ width: '100%', height: '100%' }}
+        >
           {node.children.map((child, i) => (
             <React.Fragment key={child.id}>
-              <Panel minSize={10}>
+              <Panel minSize={10} style={{ overflow: 'hidden' }}>
                 {renderNode(child)}
               </Panel>
               {i < node.children.length - 1 && (
-                 <PanelResizeHandle style={styles.resizeHandle} />
+                 <PanelResizeHandle style={handleStyle} />
               )}
             </React.Fragment>
           ))}
@@ -313,11 +333,17 @@ const App: React.FC = () => {
 
       {/* Toolbar */}
       <div style={styles.toolbar}>
-        <button onClick={() => splitPane('horizontal')} style={styles.toolBtn} title="Split Horizontal (Cmd+D)">
-            <Columns size={20} color="#666" />
+        <button onClick={() => splitPane('horizontal', 'after')} style={styles.toolBtn} title="Split Right (Cmd+D)">
+            <ArrowRight size={18} color="#666" />
         </button>
-        <button onClick={() => splitPane('vertical')} style={styles.toolBtn} title="Split Vertical (Cmd+Shift+D)">
-            <Rows size={20} color="#666" />
+        <button onClick={() => splitPane('horizontal', 'before')} style={styles.toolBtn} title="Split Left (Cmd+Alt+D)">
+            <ArrowLeft size={18} color="#666" />
+        </button>
+        <button onClick={() => splitPane('vertical', 'after')} style={styles.toolBtn} title="Split Down (Cmd+Shift+D)">
+            <ArrowDown size={18} color="#666" />
+        </button>
+        <button onClick={() => splitPane('vertical', 'before')} style={styles.toolBtn} title="Split Up (Cmd+Shift+Alt+D)">
+            <ArrowUp size={18} color="#666" />
         </button>
         <div style={styles.divider} />
         <button onClick={() => setShowSettings(true)} style={styles.toolBtn} title="Settings">
@@ -394,7 +420,7 @@ const styles: { [key: string]: React.CSSProperties } = {
     zIndex: 10,
     flexShrink: 0,
     position: 'absolute',
-    top: 0, left: 0, right: '120px', // More space for toolbar
+    top: 0, left: 0, right: '200px', // Space for expanded toolbar
   },
   toolbar: {
     position: 'absolute',
@@ -426,14 +452,25 @@ const styles: { [key: string]: React.CSSProperties } = {
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
+    width: '100%',
+    height: 'calc(100% - 30px)',
+    position: 'relative',
   },
-  resizeHandle: {
+  resizeHandleHorizontal: {
     backgroundColor: '#333',
-    flexBasis: '4px',
+    width: '4px',
     flexShrink: 0,
+    cursor: 'col-resize',
     zIndex: 20,
-    // Note: cursor styling is handled by the browser usually for resize handles, 
-    // but explicit styling doesn't hurt.
+    transition: 'background-color 0.2s',
+  },
+  resizeHandleVertical: {
+    backgroundColor: '#333',
+    height: '4px',
+    flexShrink: 0,
+    cursor: 'row-resize',
+    zIndex: 20,
+    transition: 'background-color 0.2s',
   },
   activeIndicator: {
       height: '2px',

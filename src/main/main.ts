@@ -165,27 +165,9 @@ function createPty(id: string) {
   return ptyProcess;
 }
 
-function createWindow() {
-  mainWindow = new BrowserWindow({
-    width: 1000,
-    height: 700,
-    titleBarStyle: 'hiddenInset',
-    webPreferences: {
-      preload: path.join(__dirname, 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-    backgroundColor: '#1e1e1e',
-  });
-
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:3000');
-    mainWindow.webContents.openDevTools();
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
-  }
-
-  // IPC for Terminal Management
+// --- IPC Handlers (registered once at app startup) ---
+function setupIpcHandlers() {
+  // Terminal Management
   ipcMain.on('terminal-create', (event, id) => {
     createPty(id);
   });
@@ -206,7 +188,7 @@ function createWindow() {
       }
     }
   });
-  
+
   ipcMain.on('terminal-close', (event, id) => {
     const ptyProcess = ptyProcesses.get(id);
     if (ptyProcess) {
@@ -215,7 +197,7 @@ function createWindow() {
     }
   });
 
-  // --- Settings & AI IPC ---
+  // Settings & AI
   ipcMain.handle('get-settings', () => loadSettings());
   ipcMain.handle('save-settings', (event, settings) => saveSettings(settings));
   ipcMain.handle('get-ollama-models', async (event, baseUrl) => {
@@ -232,6 +214,27 @@ function createWindow() {
     const settings = loadSettings();
     return await callAI(prompt, settings);
   });
+}
+
+function createWindow() {
+  mainWindow = new BrowserWindow({
+    width: 1000,
+    height: 700,
+    titleBarStyle: 'hiddenInset',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+    backgroundColor: '#1e1e1e',
+  });
+
+  if (process.env.NODE_ENV === 'development') {
+    mainWindow.loadURL('http://localhost:3000');
+    mainWindow.webContents.openDevTools();
+  } else {
+    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+  }
 
   mainWindow.on('closed', () => {
     mainWindow = null;
@@ -241,7 +244,10 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
+app.whenReady().then(() => {
+  setupIpcHandlers();
+  createWindow();
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
