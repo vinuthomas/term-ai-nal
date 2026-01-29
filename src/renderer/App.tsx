@@ -276,7 +276,8 @@ const App: React.FC = () => {
         }
       }
       // Split panes with directional control (using backslash key code to avoid iTerm2 conflicts)
-      if ((e.metaKey || e.ctrlKey) && e.code === 'Backslash') {
+      // Check for backslash using both code and key for compatibility
+      if ((e.metaKey || e.ctrlKey) && (e.code === 'Backslash' || e.key === '\\' || e.key === '|')) {
         e.preventDefault();
         if (e.shiftKey && e.altKey) {
            // Cmd+Shift+Alt+\: split up
