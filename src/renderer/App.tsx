@@ -1,8 +1,9 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Settings as SettingsIcon, Loader, RefreshCw, Columns, Rows, X, ArrowRight, ArrowLeft, ArrowDown, ArrowUp } from 'lucide-react';
+import { Settings as SettingsIcon, Loader, RefreshCw, Columns, Rows, X, ArrowRight, ArrowLeft, ArrowDown, ArrowUp, HelpCircle } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from './ResizablePanels';
 import TerminalPane from './TerminalPane';
 import Settings from './Settings';
+import Help from './Help';
 
 // --- Types & Interfaces ---
 declare global {
@@ -81,6 +82,7 @@ const App: React.FC = () => {
   const [refinementText, setRefinementText] = useState('');
   const [showAiBar, setShowAiBar] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
   const [pendingCommand, setPendingCommand] = useState<string | null>(null);
   const [pendingExplanation, setPendingExplanation] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -445,6 +447,7 @@ const App: React.FC = () => {
         setPendingCommand(null);
         setPendingExplanation(null);
         setShowSettings(false);
+        setShowHelp(false);
         setRefinementText('');
         // Focus the active terminal if AI bar was open
         if (wasAiBarOpen) {
@@ -544,10 +547,21 @@ const App: React.FC = () => {
             <ArrowUp size={18} color="#666" />
         </button>
         <div style={styles.divider} />
+        <button onClick={() => setShowHelp(true)} style={styles.toolBtn} title="Keyboard Shortcuts">
+            <HelpCircle size={20} color="#666" />
+        </button>
         <button onClick={() => setShowSettings(true)} style={styles.toolBtn} title="Settings">
             <SettingsIcon size={20} color="#666" />
         </button>
       </div>
+
+      {showHelp && <Help onClose={() => {
+        setShowHelp(false);
+        // Focus the active terminal after closing help
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('terminal-focus-active', { detail: { id: activePaneId } }));
+        }, 50);
+      }} />}
 
       {showSettings && <Settings onClose={() => {
         setShowSettings(false);
@@ -630,7 +644,7 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   toolbar: {
     position: 'absolute',
-    top: '5px',
+    top: '8px',
     right: '15px',
     zIndex: 100,
     display: 'flex',
@@ -654,12 +668,12 @@ const styles: { [key: string]: React.CSSProperties } = {
   },
   terminalContainer: {
     flex: 1,
-    marginTop: '30px', // Space for header
+    marginTop: '38px', // Space for header and toolbar
     display: 'flex',
     flexDirection: 'column',
     overflow: 'hidden',
     width: '100%',
-    height: 'calc(100% - 30px)',
+    height: 'calc(100% - 38px)',
     position: 'relative',
   },
   resizeHandleHorizontal: {
