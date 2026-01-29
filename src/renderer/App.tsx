@@ -261,8 +261,8 @@ const App: React.FC = () => {
   // --- Shortcuts ---
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // AI
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+      // AI Command Palette (Cmd+Shift+P or Ctrl+Shift+P)
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'P') {
         e.preventDefault();
         setShowAiBar(true);
       }

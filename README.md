@@ -4,7 +4,7 @@ An AI-powered terminal for macOS built with Electron, React, and xterm.js.
 
 ## Features
 - **Full Terminal Emulator:** Runs `zsh` natively using `node-pty`.
-- **AI Command Palette:** Press `Cmd + K` to open the AI bar.
+- **AI Command Palette:** Press `Cmd + Shift + P` to open the AI bar.
 - **Agentic Workflows:** Type natural language instructions to generate shell commands.
 - **Safety First:** All AI-generated commands require manual review and approval before execution.
 
@@ -33,7 +33,7 @@ npm run dev:electron
 
 ## How to use the AI
 1. Click into the terminal window.
-2. Press `Cmd + K`.
+2. Press `Cmd + Shift + P`.
 3. Type a request, such as:
    - "create a new git repo"
    - "create a empty django project"

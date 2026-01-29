@@ -20,7 +20,7 @@
 - **Visuals:** Dark theme, borderless/hiddenInset window style for macOS.
 
 ### 2. AI Integration
-- **Command Palette:** Triggered via `Cmd+K`.
+- **Command Palette:** Triggered via `Cmd+Shift+P`.
 - **Providers:** Support for OpenAI, Anthropic (Claude), Google (Gemini), Perplexity, and Ollama (Local).
 - **Configuration:** Dedicated Settings UI to manage API keys and Model selection.
 - **Ollama Support:** Auto-detection of installed local models and default URL (`http://localhost:11434`).
