@@ -1,17 +1,19 @@
-import React, { useState, useEffect } from 'react';
-import { X, Save } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { X, Save, Upload } from 'lucide-react';
 
 interface SettingsProps {
   onClose: () => void;
 }
 
 const Settings: React.FC<SettingsProps> = ({ onClose }) => {
-  const [activeTab, setActiveTab] = useState<'ai' | 'shortcuts'>('ai');
+  const [activeTab, setActiveTab] = useState<'ai' | 'shortcuts' | 'appearance'>('ai');
   const [provider, setProvider] = useState('openai');
   const [apiKey, setApiKey] = useState('');
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [fontSize, setFontSize] = useState(14);
+  const [theme, setTheme] = useState('default');
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -21,6 +23,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       setApiKey(s.apiKey || '');
       setModel(s.model || '');
       setBaseUrl(s.baseUrl || '');
+      setFontSize(s.fontSize || 14);
+      setTheme(s.theme || 'default');
       setLoading(false);
 
       if (s.provider === 'ollama') {
@@ -50,7 +54,16 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    await window.electronAPI.saveSettings({ provider, apiKey, model, baseUrl });
+    await window.electronAPI.saveSettings({
+      provider,
+      apiKey,
+      model,
+      baseUrl,
+      fontSize,
+      theme
+    });
+    // Trigger terminal refresh to apply new settings
+    window.dispatchEvent(new CustomEvent('settings-updated'));
     onClose();
   };
 
@@ -114,6 +127,15 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             }}
           >
             Keyboard Shortcuts
+          </button>
+          <button
+            onClick={() => setActiveTab('appearance')}
+            style={{
+              ...styles.tab,
+              ...(activeTab === 'appearance' ? styles.tabActive : {})
+            }}
+          >
+            Appearance
           </button>
         </div>
 
@@ -219,6 +241,73 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
               </small>
             </div>
           </div>
+        )}
+
+        {/* Appearance Tab */}
+        {activeTab === 'appearance' && (
+          <form onSubmit={handleSave} style={styles.form}>
+            <div style={styles.group}>
+              <label style={styles.label}>Font Size</label>
+              <input
+                type="range"
+                min="10"
+                max="24"
+                value={fontSize}
+                onChange={(e) => setFontSize(Number(e.target.value))}
+                style={styles.slider}
+              />
+              <div style={{ display: 'flex', justifyContent: 'space-between', color: '#aaa', fontSize: '12px' }}>
+                <span>10px</span>
+                <span style={{ color: '#fff', fontWeight: 'bold' }}>{fontSize}px</span>
+                <span>24px</span>
+              </div>
+            </div>
+
+            <div style={styles.group}>
+              <label style={styles.label}>Color Theme</label>
+              <select
+                value={theme}
+                onChange={(e) => setTheme(e.target.value)}
+                style={styles.input}
+              >
+                <option value="default">Default</option>
+                <option value="dracula">Dracula</option>
+                <option value="solarized-dark">Solarized Dark</option>
+                <option value="solarized-light">Solarized Light</option>
+                <option value="one-dark">One Dark</option>
+                <option value="monokai">Monokai</option>
+                <option value="nord">Nord</option>
+                <option value="gruvbox-dark">Gruvbox Dark</option>
+              </select>
+            </div>
+
+            <div style={styles.group}>
+              <label style={styles.label}>Import iTerm2 Theme (.itermcolors)</label>
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                <input
+                  type="file"
+                  accept=".itermcolors"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (file) {
+                      const text = await file.text();
+                      // Parse iTerm2 theme (basic implementation)
+                      // In a real app, you'd want more robust parsing
+                      alert('iTerm2 theme import coming soon! For now, use the built-in themes.');
+                    }
+                  }}
+                  style={{ ...styles.input, cursor: 'pointer' }}
+                />
+              </div>
+              <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
+                You can download iTerm2 color schemes from <a href="https://iterm2colorschemes.com/" target="_blank" rel="noopener noreferrer" style={{ color: '#007acc' }}>iterm2colorschemes.com</a>
+              </small>
+            </div>
+
+            <button type="submit" style={styles.saveBtn}>
+              <Save size={16} /> Save Settings
+            </button>
+          </form>
         )}
       </div>
     </div>
@@ -328,6 +417,14 @@ const styles: { [key: string]: React.CSSProperties } = {
   shortcutNote: {
     marginTop: '10px',
     textAlign: 'center',
+  },
+  slider: {
+    width: '100%',
+    height: '6px',
+    borderRadius: '3px',
+    background: '#3e3e42',
+    outline: 'none',
+    cursor: 'pointer',
   },
 };
 

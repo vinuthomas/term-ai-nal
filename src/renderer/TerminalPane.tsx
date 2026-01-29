@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useLayoutEffect } from 'react';
+import React, { useEffect, useRef, useLayoutEffect, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
+import { themes } from './themes';
 
 interface TerminalPaneProps {
   id: string;
@@ -17,6 +18,27 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const [settings, setSettings] = useState<any>({ fontSize: 14, theme: 'default' });
+
+  // Load settings
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const s = await window.electronAPI.getSettings();
+        setSettings(s);
+      } catch (e) {
+        console.error('Failed to load settings:', e);
+      }
+    };
+    loadSettings();
+
+    // Listen for settings updates
+    const handleSettingsUpdate = () => {
+      loadSettings();
+    };
+    window.addEventListener('settings-updated', handleSettingsUpdate);
+    return () => window.removeEventListener('settings-updated', handleSettingsUpdate);
+  }, []);
 
   useLayoutEffect(() => {
     if (!terminalRef.current) return;
@@ -45,15 +67,15 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       containerDiv.style.height = '100%';
       terminalRef.current.appendChild(containerDiv);
 
+      // Get theme from settings
+      const selectedTheme = themes[settings.theme] || themes.default;
+
       // Create new terminal
       term = new Terminal({
         cursorBlink: true,
-        fontSize: 14,
+        fontSize: settings.fontSize || 14,
         fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-        theme: {
-          background: '#1e1e1e',
-          foreground: '#ffffff',
-        },
+        theme: selectedTheme,
         allowProposedApi: true,
       });
 
@@ -126,7 +148,33 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       // Don't dispose terminal - keep it in global store
       // Only clean up when terminal is actually closed by closePane
     };
-  }, [id]);
+  }, [id]); // Remove settings from dependencies to prevent duplicate onData handlers
+
+  // Update terminal options when settings change
+  useEffect(() => {
+    if (!settings || !xtermRef.current) return;
+
+    const term = xtermRef.current;
+    const selectedTheme = themes[settings.theme] || themes.default;
+
+    // Update font size
+    term.options.fontSize = settings.fontSize || 14;
+
+    // Update theme
+    if (selectedTheme) {
+      term.options.theme = selectedTheme;
+    }
+
+    // Trigger a fit to adjust to new font size
+    if (fitAddonRef.current) {
+      requestAnimationFrame(() => {
+        fitAddonRef.current?.fit();
+        if (xtermRef.current && xtermRef.current.cols > 0 && xtermRef.current.rows > 0) {
+          window.electronAPI.resizeTerminal(id, xtermRef.current.cols, xtermRef.current.rows);
+        }
+      });
+    }
+  }, [settings, id]);
 
   // Handle incoming data
   useEffect(() => {
@@ -200,7 +248,21 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
     }
   }, [isActive]);
 
-  return <div ref={terminalRef} style={{ width: '100%', height: '100%', paddingTop: '6px', boxSizing: 'border-box' }} />;
+  // Listen for focus requests (e.g., when AI palette closes)
+  useEffect(() => {
+    const handleFocusRequest = (e: CustomEvent) => {
+      if (e.detail.id === id && xtermRef.current) {
+        xtermRef.current.focus();
+      }
+    };
+
+    window.addEventListener('terminal-focus-active' as any, handleFocusRequest);
+    return () => {
+      window.removeEventListener('terminal-focus-active' as any, handleFocusRequest);
+    };
+  }, [id]);
+
+  return <div ref={terminalRef} style={{ width: '100%', height: '100%', paddingTop: '6px', paddingLeft: '5px', boxSizing: 'border-box' }} />;
 };
 
 export default TerminalPane;

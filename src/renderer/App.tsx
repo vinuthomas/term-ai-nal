@@ -84,6 +84,32 @@ const App: React.FC = () => {
   const [pendingCommand, setPendingCommand] = useState<string | null>(null);
   const [pendingExplanation, setPendingExplanation] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [promptHistory, setPromptHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+
+  const refineInputRef = React.useRef<HTMLInputElement>(null);
+  const aiInputRef = React.useRef<HTMLInputElement>(null);
+
+  // Load prompt history from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('ai-prompt-history');
+      if (saved) {
+        setPromptHistory(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.error('Failed to load prompt history:', e);
+    }
+  }, []);
+
+  // Save prompt history to localStorage when it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('ai-prompt-history', JSON.stringify(promptHistory));
+    } catch (e) {
+      console.error('Failed to save prompt history:', e);
+    }
+  }, [promptHistory]);
 
   // --- Listeners ---
   useEffect(() => {
@@ -246,7 +272,20 @@ const App: React.FC = () => {
   const processAIRequest = async (prompt: string) => {
     setIsProcessing(true);
     try {
-      const response = await window.electronAPI.askAI(prompt);
+      // Get current working directory for context
+      let cwd = '';
+      try {
+        cwd = await window.electronAPI.getTerminalCwd(activePaneId);
+      } catch (e) {
+        console.error('Failed to get CWD:', e);
+      }
+
+      // Enhance prompt with context
+      const contextualPrompt = cwd
+        ? `[Current Directory: ${cwd}]\n${prompt}`
+        : prompt;
+
+      const response = await window.electronAPI.askAI(contextualPrompt);
       const cmdMatch = response.match(/COMMAND:\s*([\s\S]*?)(?=\nEXPLANATION:|$)/i);
       const expMatch = response.match(/EXPLANATION:\s*([\s\S]*?)$/i);
       const cmd = cmdMatch ? cmdMatch[1].trim() : response.trim();
@@ -265,6 +304,13 @@ const App: React.FC = () => {
     e.preventDefault();
     if (!aiInput.trim()) return;
     setOriginalRequest(aiInput);
+    // Add to history (avoid duplicates and limit to 50 items)
+    setPromptHistory(prev => {
+      const filtered = prev.filter(p => p !== aiInput.trim());
+      const newHistory = [aiInput.trim(), ...filtered].slice(0, 50);
+      return newHistory;
+    });
+    setHistoryIndex(-1);
     await processAIRequest(aiInput);
     setAiInput('');
   };
@@ -280,21 +326,78 @@ const App: React.FC = () => {
     setRefinementText('');
   };
 
-  const executeCommand = () => {
+  const executeCommand = useCallback(() => {
     if (pendingCommand) {
       window.electronAPI.sendTerminalInput(activePaneId, pendingCommand + '\n');
       setPendingCommand(null);
       setPendingExplanation(null);
       setShowAiBar(false);
       setRefinementText('');
+      // Focus the active terminal after closing AI bar
+      setTimeout(() => {
+        window.dispatchEvent(new CustomEvent('terminal-focus-active', { detail: { id: activePaneId } }));
+      }, 50);
     }
-  };
+  }, [pendingCommand, activePaneId]);
 
-  const cancelCommand = () => {
+  const cancelCommand = useCallback(() => {
     setPendingCommand(null);
     setPendingExplanation(null);
     setRefinementText('');
-  };
+    setShowAiBar(false);
+    // Focus the active terminal after closing AI bar
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('terminal-focus-active', { detail: { id: activePaneId } }));
+    }, 50);
+  }, [activePaneId]);
+
+  // Handle AI bar keyboard shortcuts
+  useEffect(() => {
+    if (!showAiBar) return;
+
+    const handleAiBarKeyDown = (e: KeyboardEvent) => {
+      // Don't interfere if user is typing in an input
+      const target = e.target as HTMLElement;
+      const isInputFocused = target.tagName === 'INPUT';
+
+      // Enter key when results are shown - execute command
+      if (e.key === 'Enter' && pendingCommand && !isInputFocused) {
+        e.preventDefault();
+        executeCommand();
+        return;
+      }
+
+      // Up/Down arrow navigation through history (only in initial input, not refine)
+      if ((e.key === 'ArrowUp' || e.key === 'ArrowDown') && !pendingCommand && isInputFocused) {
+        e.preventDefault();
+        if (promptHistory.length === 0) return;
+
+        if (e.key === 'ArrowUp') {
+          const newIndex = historyIndex < promptHistory.length - 1 ? historyIndex + 1 : historyIndex;
+          setHistoryIndex(newIndex);
+          setAiInput(promptHistory[newIndex] || '');
+        } else if (e.key === 'ArrowDown') {
+          const newIndex = historyIndex > 0 ? historyIndex - 1 : -1;
+          setHistoryIndex(newIndex);
+          setAiInput(newIndex === -1 ? '' : promptHistory[newIndex]);
+        }
+        return;
+      }
+
+      // Auto-focus refine input when results are shown and user types any other key
+      if (pendingCommand && !isInputFocused && e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
+        e.preventDefault();
+        if (refineInputRef.current) {
+          refineInputRef.current.focus();
+          // Append the typed character
+          setRefinementText(prev => prev + e.key);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleAiBarKeyDown);
+    return () => window.removeEventListener('keydown', handleAiBarKeyDown);
+  }, [showAiBar, pendingCommand, promptHistory, historyIndex, executeCommand]);
 
   // --- Shortcuts ---
   useEffect(() => {
@@ -337,16 +440,23 @@ const App: React.FC = () => {
       }
 
       if (e.key === 'Escape') {
+        const wasAiBarOpen = showAiBar;
         setShowAiBar(false);
         setPendingCommand(null);
         setPendingExplanation(null);
         setShowSettings(false);
         setRefinementText('');
+        // Focus the active terminal if AI bar was open
+        if (wasAiBarOpen) {
+          setTimeout(() => {
+            window.dispatchEvent(new CustomEvent('terminal-focus-active', { detail: { id: activePaneId } }));
+          }, 50);
+        }
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activePaneId, terminals, layout]);
+  }, [activePaneId, terminals, layout, showAiBar]);
 
   // --- Recursive Renderer ---
   const renderNode = (node: LayoutNode) => {
@@ -439,7 +549,13 @@ const App: React.FC = () => {
         </button>
       </div>
 
-      {showSettings && <Settings onClose={() => setShowSettings(false)} />}
+      {showSettings && <Settings onClose={() => {
+        setShowSettings(false);
+        // Focus the active terminal after closing settings
+        setTimeout(() => {
+          window.dispatchEvent(new CustomEvent('terminal-focus-active', { detail: { id: activePaneId } }));
+        }, 50);
+      }} />}
 
       {/* Layout Root */}
       <div style={styles.terminalContainer}>
@@ -457,6 +573,7 @@ const App: React.FC = () => {
             ) : !pendingCommand ? (
               <form onSubmit={handleAiSubmit} style={{ width: '100%' }}>
                 <input
+                  ref={aiInputRef}
                   autoFocus
                   style={styles.input}
                   placeholder={`AI Command for ${activePaneId}...`}
@@ -472,6 +589,7 @@ const App: React.FC = () => {
                 <form onSubmit={handleRefineSubmit} style={styles.refineForm}>
                   <div style={{position: 'relative', width: '100%'}}>
                     <input
+                        ref={refineInputRef}
                         style={styles.refineInput}
                         placeholder="Not what you wanted? Refine request..."
                         value={refinementText}

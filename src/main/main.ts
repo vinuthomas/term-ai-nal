@@ -14,6 +14,9 @@ const defaultSettings = {
   apiKey: '',
   model: 'gpt-4o',
   baseUrl: '', // For Ollama or custom endpoints
+  fontSize: 14,
+  theme: 'default', // 'default', 'dracula', 'solarized-dark', 'one-dark', 'custom'
+  customTheme: null, // For imported iTerm themes
 };
 
 function loadSettings() {
@@ -41,8 +44,10 @@ function saveSettings(settings: any) {
 async function callAI(prompt: string, settings: any) {
   const shell = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
   const systemInfo = `OS: ${os.platform()} ${os.release()} (${os.arch()})\nShell: ${shell}`;
-  const systemPrompt = `You are an expert terminal assistant running on ${systemInfo}. 
-Your goal is to convert natural language instructions into a SINGLE executable ${shell} command. 
+  const systemPrompt = `You are an expert terminal assistant running on ${systemInfo}.
+Your goal is to convert natural language instructions into a SINGLE executable ${shell} command.
+
+CONTEXT: The user's prompt may include [Current Directory: /path/to/dir] - use this to generate contextually relevant commands with correct relative/absolute paths.
 
 CRITICAL RULES:
 1. Return your response in this EXACT format:
@@ -52,7 +57,12 @@ CRITICAL RULES:
 2. DO NOT provide multiple command options.
 3. DO NOT use markdown blocks or backticks.
 4. The EXPLANATION must be a single, short sentence.
-5. If the request is unclear, provide the most likely command.`;
+5. NEVER use generic placeholders like <path>, <file>, <ip-address>, <url>, etc.
+6. If specific values are needed (paths, IPs, URLs, filenames), ask for them in a follow-up question within the EXPLANATION field instead of providing a generic command.
+7. Use the current directory context when generating commands - prefer relative paths when appropriate.
+8. Example: If user says "connect to server" and no IP is given, respond with:
+   COMMAND: echo "Please specify: What is the server IP address or hostname?"
+   EXPLANATION: Need specific server address to connect`;
 
   const { provider, apiKey, model, baseUrl } = settings;
 
