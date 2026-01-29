@@ -72,10 +72,10 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       { keys: 'Cmd+Shift+P', description: 'Open AI Command Palette' },
     ]},
     { category: 'Pane Management', items: [
-      { keys: 'Cmd+\\', description: 'Split Right' },
-      { keys: 'Cmd+Shift+\\', description: 'Split Down' },
-      { keys: 'Cmd+Alt+\\', description: 'Split Left' },
-      { keys: 'Cmd+Shift+Alt+\\', description: 'Split Up' },
+      { keys: 'Cmd+T', description: 'Split Right' },
+      { keys: 'Cmd+Shift+T', description: 'Split Down' },
+      { keys: 'Cmd+Alt+T', description: 'Split Left' },
+      { keys: 'Cmd+Shift+Alt+T', description: 'Split Up' },
       { keys: 'Cmd+W', description: 'Close Current Pane' },
     ]},
     { category: 'Navigation', items: [

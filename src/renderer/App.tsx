@@ -108,6 +108,38 @@ const App: React.FC = () => {
     };
   }, []);
 
+  // Handle terminal exit separately to avoid dependency issues
+  useEffect(() => {
+    window.electronAPI.onTerminalExit((id) => {
+      const shouldClose = window.confirm(
+        'Terminal session ended. Would you like to close this pane?'
+      );
+      if (shouldClose) {
+        // Use setLayout directly to avoid dependency issues
+        setLayout(prevLayout => {
+          const removeByPaneId = (node: LayoutNode): LayoutNode | null => {
+            if (node.type === 'pane' && node.paneId === id) return null;
+            if (node.children) {
+              const newChildren = node.children
+                .map(removeByPaneId)
+                .filter((n): n is LayoutNode => n !== null);
+
+              if (newChildren.length === 0) return null;
+              if (newChildren.length === 1 && node.id !== 'root') return newChildren[0];
+              return { ...node, children: newChildren };
+            }
+            return node;
+          };
+
+          const result = removeByPaneId(prevLayout);
+          return result || prevLayout;
+        });
+
+        setTerminals(prev => prev.filter(t => t !== id));
+      }
+    });
+  }, []);
+
   // --- Layout Actions ---
 
   const splitPane = async (direction: 'horizontal' | 'vertical', position: 'before' | 'after' = 'after') => {
@@ -275,21 +307,20 @@ const App: React.FC = () => {
           setActivePaneId(paneId);
         }
       }
-      // Split panes with directional control (using backslash key code to avoid iTerm2 conflicts)
-      // Check for backslash using both code and key for compatibility
-      if ((e.metaKey || e.ctrlKey) && (e.code === 'Backslash' || e.key === '\\' || e.key === '|')) {
+      // Split panes with Cmd+T (like "new Tab")
+      if ((e.metaKey || e.ctrlKey) && (e.key === 't' || e.key === 'T')) {
         e.preventDefault();
         if (e.shiftKey && e.altKey) {
-           // Cmd+Shift+Alt+\: split up
+           // Cmd+Shift+Alt+T: split up
            splitPane('vertical', 'before');
         } else if (e.shiftKey) {
-           // Cmd+Shift+\: split down
+           // Cmd+Shift+T: split down
            splitPane('vertical', 'after');
         } else if (e.altKey) {
-           // Cmd+Alt+\: split left
+           // Cmd+Alt+T: split left
            splitPane('horizontal', 'before');
         } else {
-           // Cmd+\: split right
+           // Cmd+T: split right
            splitPane('horizontal', 'after');
         }
       }
@@ -384,16 +415,16 @@ const App: React.FC = () => {
 
       {/* Toolbar */}
       <div style={styles.toolbar}>
-        <button onClick={() => splitPane('horizontal', 'after')} style={styles.toolBtn} title="Split Right (Cmd+\)">
+        <button onClick={() => splitPane('horizontal', 'after')} style={styles.toolBtn} title="Split Right (Cmd+T)">
             <ArrowRight size={18} color="#666" />
         </button>
-        <button onClick={() => splitPane('horizontal', 'before')} style={styles.toolBtn} title="Split Left (Cmd+Alt+\)">
+        <button onClick={() => splitPane('horizontal', 'before')} style={styles.toolBtn} title="Split Left (Cmd+Alt+T)">
             <ArrowLeft size={18} color="#666" />
         </button>
-        <button onClick={() => splitPane('vertical', 'after')} style={styles.toolBtn} title="Split Down (Cmd+Shift+\)">
+        <button onClick={() => splitPane('vertical', 'after')} style={styles.toolBtn} title="Split Down (Cmd+Shift+T)">
             <ArrowDown size={18} color="#666" />
         </button>
-        <button onClick={() => splitPane('vertical', 'before')} style={styles.toolBtn} title="Split Up (Cmd+Shift+Alt+\)">
+        <button onClick={() => splitPane('vertical', 'before')} style={styles.toolBtn} title="Split Up (Cmd+Shift+Alt+T)">
             <ArrowUp size={18} color="#666" />
         </button>
         <div style={styles.divider} />

@@ -155,7 +155,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
     }
   }, [isActive]);
 
-  return <div ref={terminalRef} style={{ width: '100%', height: '100%' }} />;
+  return <div ref={terminalRef} style={{ width: '100%', height: '100%', paddingTop: '6px', boxSizing: 'border-box' }} />;
 };
 
 export default TerminalPane;

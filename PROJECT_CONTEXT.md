@@ -34,7 +34,7 @@
 - **Refinement:** Users can refine a generated command using the "Follow-up" input box if the initial suggestion is incorrect.
 
 ### 4. User Interface
-- **Split Panes:** Support for multiple terminal panes with directional splits (`Cmd+\` to split right, `Cmd+Shift+\` to split down, etc.).
+- **Split Panes:** Support for multiple terminal panes with directional splits (`Cmd+T` to split right, `Cmd+Shift+T` to split down, etc.).
 - **Active Pane:** AI commands are targeted to the currently focused/active pane.
 - **Review UI:** A dedicated overlay for reviewing AI suggestions before execution, displaying the explanation separately from the code.
 

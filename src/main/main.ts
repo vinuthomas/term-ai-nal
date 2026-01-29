@@ -142,6 +142,7 @@ CRITICAL RULES:
 // --- Main Window & Pty ---
 let mainWindow: BrowserWindow | null = null;
 const ptyProcesses = new Map<string, pty.IPty>();
+const closingTerminals = new Set<string>(); // Track terminals being intentionally closed
 const shell = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
 
 function getCwd(pid: number): string {
@@ -176,8 +177,12 @@ function createPty(id: string, cwd?: string) {
   });
 
   ptyProcess.onExit(() => {
-    mainWindow?.webContents.send('terminal-exit', { id });
+    // Only send exit event if terminal wasn't intentionally closed
+    if (!closingTerminals.has(id)) {
+      mainWindow?.webContents.send('terminal-exit', { id });
+    }
     ptyProcesses.delete(id);
+    closingTerminals.delete(id);
   });
 
   ptyProcesses.set(id, ptyProcess);
@@ -219,6 +224,7 @@ function setupIpcHandlers() {
   ipcMain.on('terminal-close', (event, id) => {
     const ptyProcess = ptyProcesses.get(id);
     if (ptyProcess) {
+      closingTerminals.add(id); // Mark as intentionally closing
       ptyProcess.kill();
       ptyProcesses.delete(id);
     }

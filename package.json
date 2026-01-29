@@ -18,7 +18,8 @@
   },
   "build": {
     "appId": "com.termainal.app",
-    "productName": "Term-AI-nal",
+    "productName": "term-ai-nal",
+    "artifactName": "${productName}.${ext}",
     "directories": {
       "output": "release"
     },
@@ -37,6 +38,7 @@
           "arch": ["x64", "arm64"]
         }
       ],
+      "artifactName": "${productName}-${arch}.${ext}",
       "category": "public.app-category.developer-tools",
       "hardenedRuntime": true,
       "gatekeeperAssess": false,
@@ -54,6 +56,7 @@
           "arch": ["x64"]
         }
       ],
+      "artifactName": "${productName}-${arch}.${ext}",
       "icon": "build/icon.ico"
     },
     "linux": {
@@ -62,6 +65,7 @@
         "deb",
         "rpm"
       ],
+      "artifactName": "${productName}.${ext}",
       "category": "Development",
       "icon": "build/icon.png"
     },
