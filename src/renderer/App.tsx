@@ -262,12 +262,12 @@ const App: React.FC = () => {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // AI Command Palette (Cmd+Shift+P or Ctrl+Shift+P)
-      if ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key === 'P') {
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'P' || e.key === 'p')) {
         e.preventDefault();
         setShowAiBar(true);
       }
       // Switch to pane by number (Cmd+1 through Cmd+9)
-      if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+      if ((e.metaKey || e.ctrlKey) && !e.shiftKey && /^[1-9]$/.test(e.key)) {
         e.preventDefault();
         const paneNumber = parseInt(e.key, 10);
         const paneId = findPaneIdByNumber(layout, paneNumber);
@@ -275,8 +275,8 @@ const App: React.FC = () => {
           setActivePaneId(paneId);
         }
       }
-      // Split panes with directional control (using backslash to avoid iTerm2 conflicts)
-      if ((e.metaKey || e.ctrlKey) && e.key === '\\') {
+      // Split panes with directional control (using backslash key code to avoid iTerm2 conflicts)
+      if ((e.metaKey || e.ctrlKey) && e.code === 'Backslash') {
         e.preventDefault();
         if (e.shiftKey && e.altKey) {
            // Cmd+Shift+Alt+\: split up
@@ -293,7 +293,7 @@ const App: React.FC = () => {
         }
       }
       // Close Pane (Cmd+W)
-      if ((e.metaKey || e.ctrlKey) && e.key === 'w') {
+      if ((e.metaKey || e.ctrlKey) && (e.key === 'w' || e.key === 'W')) {
         e.preventDefault();
         closePane(activePaneId);
       }
