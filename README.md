@@ -139,15 +139,6 @@ npm run dist:mac
 - **Windows builds:** Works on any platform, but signing requires a Windows code signing certificate
 - **Linux builds:** Works on any platform
 
-### Icons
-
-To customize app icons, add these files to a `build/` directory:
-- `build/icon.icns` - macOS icon (512x512 PNG converted to ICNS)
-- `build/icon.ico` - Windows icon (256x256 PNG converted to ICO)
-- `build/icon.png` - Linux icon (512x512 PNG)
-
-Online tools like [iConvert Icons](https://iconverticons.com/) can help create these formats.
-
 ### Entitlements (macOS)
 
 For native modules like `node-pty`, create `build/entitlements.mac.plist`:
