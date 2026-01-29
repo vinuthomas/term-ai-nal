@@ -148,6 +148,13 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
      }
   }, [isActive, id]);
 
+  // Focus terminal when pane becomes active
+  useEffect(() => {
+    if (isActive && xtermRef.current) {
+      xtermRef.current.focus();
+    }
+  }, [isActive]);
+
   return <div ref={terminalRef} style={{ width: '100%', height: '100%' }} />;
 };
 
