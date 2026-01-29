@@ -205,6 +205,12 @@ const App: React.FC = () => {
   const closePane = (targetPaneId: string) => {
     if (terminals.length <= 1) return;
 
+    // Dispatch event to clean up terminal from global store
+    window.dispatchEvent(new CustomEvent('terminal-close-event', { detail: { id: targetPaneId } }));
+
+    // Close the PTY
+    window.electronAPI.closeTerminal(targetPaneId);
+
     setLayout(prevLayout => {
       const removeByPaneId = (node: LayoutNode): LayoutNode | null => {
         if (node.type === 'pane' && node.paneId === targetPaneId) return null;
@@ -346,8 +352,8 @@ const App: React.FC = () => {
   const renderNode = (node: LayoutNode) => {
     if (node.type === 'pane' && node.paneId) {
       return (
-        <div 
-          key={node.id} 
+        <div
+          key={node.paneId}
           style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column' }}
           onClick={() => setActivePaneId(node.paneId!)}
         >
@@ -393,7 +399,7 @@ const App: React.FC = () => {
           style={{ width: '100%', height: '100%' }}
         >
           {node.children.map((child, i) => (
-            <React.Fragment key={child.id}>
+            <React.Fragment key={child.type === 'pane' ? child.paneId : child.id}>
               <Panel minSize={10} style={{ overflow: 'hidden' }}>
                 {renderNode(child)}
               </Panel>

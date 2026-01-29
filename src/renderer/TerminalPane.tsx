@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useLayoutEffect } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -10,37 +10,67 @@ interface TerminalPaneProps {
   onData: (data: string) => void; // For AI input bar feedback if needed
 }
 
+// Global store for terminal instances AND their container divs
+const globalTerminals = new Map<string, { term: Terminal, fitAddon: FitAddon, containerDiv: HTMLDivElement }>();
+
 const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (!terminalRef.current) return;
 
-    // Initialize xterm
-    const term = new Terminal({
-      cursorBlink: true,
-      fontSize: 14,
-      fontFamily: 'Menlo, Monaco, "Courier New", monospace',
-      theme: {
-        background: '#1e1e1e',
-        foreground: '#ffffff',
-      },
-      allowProposedApi: true,
-    });
+    let term: Terminal;
+    let fitAddon: FitAddon;
+    let containerDiv: HTMLDivElement;
 
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    fitAddonRef.current = fitAddon;
+    // Check if terminal already exists in global store
+    if (globalTerminals.has(id)) {
+      const existing = globalTerminals.get(id)!;
+      term = existing.term;
+      fitAddon = existing.fitAddon;
+      containerDiv = existing.containerDiv;
 
-    term.open(terminalRef.current);
-    fitAddon.fit();
+      // Move the existing container div to the new parent
+      if (terminalRef.current && containerDiv.parentElement !== terminalRef.current) {
+        terminalRef.current.appendChild(containerDiv);
+      }
+
+      fitAddon.fit();
+    } else {
+      // Create new container div that will persist
+      containerDiv = document.createElement('div');
+      containerDiv.style.width = '100%';
+      containerDiv.style.height = '100%';
+      terminalRef.current.appendChild(containerDiv);
+
+      // Create new terminal
+      term = new Terminal({
+        cursorBlink: true,
+        fontSize: 14,
+        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+        theme: {
+          background: '#1e1e1e',
+          foreground: '#ffffff',
+        },
+        allowProposedApi: true,
+      });
+
+      fitAddon = new FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(containerDiv);
+      fitAddon.fit();
+
+      // Store in global map
+      globalTerminals.set(id, { term, fitAddon, containerDiv });
+
+      // Create PTY in main process (only once)
+      window.electronAPI.createTerminal(id, cwd);
+    }
 
     xtermRef.current = term;
-
-    // Create PTY in main process
-    window.electronAPI.createTerminal(id, cwd);
+    fitAddonRef.current = fitAddon;
 
     // Send input to PTY
     term.onData((data) => {
@@ -92,8 +122,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       clearTimeout(resizeTimeout);
       clearTimeout(initialResizeTimeout);
       resizeObserver.disconnect();
-      term.dispose();
-      window.electronAPI.closeTerminal(id);
+
+      // Don't dispose terminal - keep it in global store
+      // Only clean up when terminal is actually closed by closePane
     };
   }, [id]);
 
@@ -105,9 +136,23 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       }
     };
 
+    const handleTerminalClose = (e: CustomEvent) => {
+      if (e.detail.id === id) {
+        // Actually dispose and clean up when terminal is closed
+        const stored = globalTerminals.get(id);
+        if (stored) {
+          stored.term.dispose();
+          stored.containerDiv.remove();
+          globalTerminals.delete(id);
+        }
+      }
+    };
+
     window.addEventListener('terminal-data-event' as any, handleData);
+    window.addEventListener('terminal-close-event' as any, handleTerminalClose);
     return () => {
       window.removeEventListener('terminal-data-event' as any, handleData);
+      window.removeEventListener('terminal-close-event' as any, handleTerminalClose);
     };
   }, [id]);
 

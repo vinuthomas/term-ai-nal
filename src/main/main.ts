@@ -164,6 +164,12 @@ function getCwd(pid: number): string {
 }
 
 function createPty(id: string, cwd?: string) {
+  // If PTY already exists for this ID, don't recreate it
+  if (ptyProcesses.has(id)) {
+    console.log(`PTY ${id} already exists, skipping creation`);
+    return ptyProcesses.get(id)!;
+  }
+
   const ptyProcess = pty.spawn(shell, ['--login'], {
     name: 'xterm-color',
     cols: 80,
