@@ -8,7 +8,8 @@ import Settings from './Settings';
 declare global {
   interface Window {
     electronAPI: {
-      createTerminal: (id: string) => void;
+      createTerminal: (id: string, cwd?: string) => void;
+      getTerminalCwd: (id: string) => Promise<string>;
       sendTerminalInput: (id: string, data: string) => void;
       resizeTerminal: (id: string, cols: number, rows: number) => void;
       closeTerminal: (id: string) => void;
@@ -28,6 +29,8 @@ type LayoutNode = {
   direction?: 'horizontal' | 'vertical'; // For groups
   children?: LayoutNode[]; // For groups
   paneId?: string; // For pane (the actual terminal ID)
+  cwd?: string; // For pane (current working directory)
+  paneNumber?: number; // For pane (display number for keyboard shortcuts)
 };
 
 // --- Helper Functions for Tree Manipulation ---
@@ -47,6 +50,18 @@ const findNodeByPaneId = (root: LayoutNode, paneId: string): { node: LayoutNode,
   return null;
 };
 
+// Find pane ID by pane number
+const findPaneIdByNumber = (root: LayoutNode, paneNumber: number): string | null => {
+  if (root.type === 'pane' && root.paneNumber === paneNumber) return root.paneId || null;
+  if (root.children) {
+    for (const child of root.children) {
+      const result = findPaneIdByNumber(child, paneNumber);
+      if (result) return result;
+    }
+  }
+  return null;
+};
+
 const App: React.FC = () => {
   // --- State ---
   // Initial Tree: One Root Group containing One Pane
@@ -54,11 +69,12 @@ const App: React.FC = () => {
     id: 'root',
     type: 'group',
     direction: 'horizontal',
-    children: [{ id: 'node-1', type: 'pane', paneId: 'term-1' }]
+    children: [{ id: 'node-1', type: 'pane', paneId: 'term-1', paneNumber: 1 }]
   });
-  
+
   const [activePaneId, setActivePaneId] = useState<string>('term-1');
   const [terminals, setTerminals] = useState<string[]>(['term-1']); // Keep track of active terminal IDs for cleanup
+  const [nextPaneNumber, setNextPaneNumber] = useState<number>(2); // Counter for pane numbers
 
   const [aiInput, setAiInput] = useState('');
   const [originalRequest, setOriginalRequest] = useState('');
@@ -94,13 +110,30 @@ const App: React.FC = () => {
 
   // --- Layout Actions ---
 
-  const splitPane = (direction: 'horizontal' | 'vertical', position: 'before' | 'after' = 'after') => {
+  const splitPane = async (direction: 'horizontal' | 'vertical', position: 'before' | 'after' = 'after') => {
     const newPaneId = `term-${Date.now()}`;
     const newNodeId = `node-${Date.now()}`;
-    const newPaneNode: LayoutNode = { id: newNodeId, type: 'pane', paneId: newPaneId };
+    const paneNumber = nextPaneNumber;
+
+    // Get the CWD of the currently active pane
+    let cwd: string | undefined;
+    try {
+      cwd = await window.electronAPI.getTerminalCwd(activePaneId);
+    } catch (error) {
+      console.error('Failed to get CWD:', error);
+    }
+
+    const newPaneNode: LayoutNode = {
+      id: newNodeId,
+      type: 'pane',
+      paneId: newPaneId,
+      cwd: cwd,
+      paneNumber: paneNumber
+    };
 
     setTerminals(prev => [...prev, newPaneId]);
     setActivePaneId(newPaneId);
+    setNextPaneNumber(prev => prev + 1);
 
     setLayout(prevLayout => {
       // Deep clone to avoid mutation
@@ -233,6 +266,15 @@ const App: React.FC = () => {
         e.preventDefault();
         setShowAiBar(true);
       }
+      // Switch to pane by number (Cmd+1 through Cmd+9)
+      if ((e.metaKey || e.ctrlKey) && /^[1-9]$/.test(e.key)) {
+        e.preventDefault();
+        const paneNumber = parseInt(e.key, 10);
+        const paneId = findPaneIdByNumber(layout, paneNumber);
+        if (paneId) {
+          setActivePaneId(paneId);
+        }
+      }
       // Split panes with directional control
       if ((e.metaKey || e.ctrlKey) && e.key === 'd') {
         e.preventDefault();
@@ -281,13 +323,21 @@ const App: React.FC = () => {
                ...styles.activeIndicator, 
                backgroundColor: activePaneId === node.paneId ? '#50fa7b' : 'transparent'
            }} />
-           <TerminalPane 
-              id={node.paneId} 
-              isActive={activePaneId === node.paneId} 
-              onData={() => {}} 
+           <TerminalPane
+              id={node.paneId}
+              isActive={activePaneId === node.paneId}
+              cwd={node.cwd}
+              onData={() => {}}
            />
+           {/* Pane number indicator */}
+           {node.paneNumber && (
+             <div style={styles.paneNumberBadge}>
+               {node.paneNumber}
+             </div>
+           )}
+           {/* Close button */}
            {terminals.length > 1 && (
-             <button 
+             <button
                 onClick={(e) => { e.stopPropagation(); closePane(node.paneId!); }}
                 style={styles.closePaneBtn}
              >
@@ -479,6 +529,22 @@ const styles: { [key: string]: React.CSSProperties } = {
       top: 0,
       left: 0,
       zIndex: 5,
+  },
+  paneNumberBadge: {
+      position: 'absolute',
+      top: '5px',
+      right: '30px',
+      background: 'rgba(0, 0, 0, 0.4)',
+      color: 'rgba(255, 255, 255, 0.6)',
+      border: '1px solid rgba(255, 255, 255, 0.2)',
+      borderRadius: '4px',
+      padding: '2px 6px',
+      fontSize: '11px',
+      fontWeight: 'bold',
+      fontFamily: 'monospace',
+      userSelect: 'none',
+      pointerEvents: 'none',
+      zIndex: 15,
   },
   closePaneBtn: {
       position: 'absolute',

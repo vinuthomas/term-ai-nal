@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as pty from 'node-pty';
+import { execSync } from 'child_process';
 
 // --- Settings Management (Simple FS based) ---
 const getUserDataPath = () => app.getPath('userData');
@@ -143,12 +144,30 @@ let mainWindow: BrowserWindow | null = null;
 const ptyProcesses = new Map<string, pty.IPty>();
 const shell = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
 
-function createPty(id: string) {
+function getCwd(pid: number): string {
+  try {
+    if (os.platform() === 'darwin') {
+      // macOS: Use lsof to get the current working directory
+      const output = execSync(`lsof -a -d cwd -p ${pid} -Fn`, { encoding: 'utf8' });
+      const match = output.match(/n(.+)/);
+      return match ? match[1] : process.env.HOME || '/';
+    } else if (os.platform() === 'linux') {
+      // Linux: Read from /proc
+      const cwdPath = fs.readlinkSync(`/proc/${pid}/cwd`);
+      return cwdPath;
+    }
+  } catch (error) {
+    console.error(`Failed to get CWD for PID ${pid}:`, error);
+  }
+  return process.env.HOME || '/';
+}
+
+function createPty(id: string, cwd?: string) {
   const ptyProcess = pty.spawn(shell, ['--login'], {
     name: 'xterm-color',
     cols: 80,
     rows: 30,
-    cwd: process.env.HOME,
+    cwd: cwd || process.env.HOME,
     env: process.env,
   });
 
@@ -168,8 +187,16 @@ function createPty(id: string) {
 // --- IPC Handlers (registered once at app startup) ---
 function setupIpcHandlers() {
   // Terminal Management
-  ipcMain.on('terminal-create', (event, id) => {
-    createPty(id);
+  ipcMain.on('terminal-create', (event, { id, cwd }) => {
+    createPty(id, cwd);
+  });
+
+  ipcMain.handle('terminal-get-cwd', (event, id) => {
+    const ptyProcess = ptyProcesses.get(id);
+    if (ptyProcess) {
+      return getCwd(ptyProcess.pid);
+    }
+    return process.env.HOME || '/';
   });
 
   ipcMain.on('terminal-input', (event, { id, data }) => {

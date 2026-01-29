@@ -6,10 +6,11 @@ import '@xterm/xterm/css/xterm.css';
 interface TerminalPaneProps {
   id: string;
   isActive: boolean;
+  cwd?: string;
   onData: (data: string) => void; // For AI input bar feedback if needed
 }
 
-const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive }) => {
+const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -39,7 +40,7 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive }) => {
     xtermRef.current = term;
 
     // Create PTY in main process
-    window.electronAPI.createTerminal(id);
+    window.electronAPI.createTerminal(id, cwd);
 
     // Send input to PTY
     term.onData((data) => {
