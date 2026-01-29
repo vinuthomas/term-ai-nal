@@ -1,0 +1,99 @@
+{
+  "name": "term-ai-nal",
+  "version": "1.0.0",
+  "description": "",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build:renderer": "vite build",
+    "build:main": "tsc src/main/main.ts src/main/preload.ts --outDir dist/main --module commonjs --target es6 --esModuleInterop --skipLibCheck",
+    "start": "npm run build:main && npm run build:renderer && electron .",
+    "dev:electron": "NODE_ENV=development concurrently \"npm run dev\" \"wait-on http://localhost:3000 && npm run build:main && electron .\"",
+    "postinstall": "electron-rebuild",
+    "dist": "npm run build:main && npm run build:renderer && electron-builder",
+    "dist:mac": "npm run build:main && npm run build:renderer && electron-builder --mac",
+    "dist:win": "npm run build:main && npm run build:renderer && electron-builder --win",
+    "dist:linux": "npm run build:main && npm run build:renderer && electron-builder --linux",
+    "dist:all": "npm run build:main && npm run build:renderer && electron-builder --mac --win --linux"
+  },
+  "build": {
+    "appId": "com.termainal.app",
+    "productName": "Term-AI-nal",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
+      ],
+      "category": "public.app-category.developer-tools",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64", "ia32"]
+        },
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb",
+        "rpm"
+      ],
+      "category": "Development",
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "concurrently": "^9.2.1",
+    "electron": "^40.1.0",
+    "electron-builder": "^26.4.0",
+    "typescript": "^5.9.3",
+    "vite": "^7.3.1",
+    "wait-on": "^9.0.3"
+  },
+  "dependencies": {
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "electron-store": "^11.0.2",
+    "lucide-react": "^0.563.0",
+    "node-pty": "^1.1.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
+    "react-resizable-panels": "^4.5.4"
+  }
+}
