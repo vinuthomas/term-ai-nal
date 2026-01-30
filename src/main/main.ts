@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell as electronShell } from 'electron';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
@@ -17,6 +17,7 @@ const defaultSettings = {
   fontSize: 14,
   theme: 'default', // 'default', 'dracula', 'solarized-dark', 'one-dark', 'custom'
   customTheme: null, // For imported iTerm themes
+  customThemeName: '', // Name of imported theme
 };
 
 function loadSettings() {
@@ -37,6 +38,62 @@ function saveSettings(settings: any) {
   } catch (e) {
     console.error('Failed to save settings', e);
     return false;
+  }
+}
+
+// --- iTerm Theme Parser ---
+function parseItermTheme(xmlContent: string): any {
+  try {
+    // Parse iTerm2 .itermcolors XML format
+    const colorMap: any = {};
+
+    // Match <key>Color Name</key> followed by <dict> with RGB values
+    const keyRegex = /<key>(.*?)<\/key>\s*<dict>([\s\S]*?)<\/dict>/g;
+    let match;
+
+    while ((match = keyRegex.exec(xmlContent)) !== null) {
+      const colorName = match[1];
+      const colorDict = match[2];
+
+      // Extract RGB components (stored as floating point 0-1)
+      const redMatch = colorDict.match(/<key>Red Component<\/key>\s*<real>([\d.]+)<\/real>/);
+      const greenMatch = colorDict.match(/<key>Green Component<\/key>\s*<real>([\d.]+)<\/real>/);
+      const blueMatch = colorDict.match(/<key>Blue Component<\/key>\s*<real>([\d.]+)<\/real>/);
+
+      if (redMatch && greenMatch && blueMatch) {
+        const r = Math.round(parseFloat(redMatch[1]) * 255);
+        const g = Math.round(parseFloat(greenMatch[1]) * 255);
+        const b = Math.round(parseFloat(blueMatch[1]) * 255);
+        colorMap[colorName] = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
+      }
+    }
+
+    // Map iTerm color names to xterm.js theme format
+    const theme: any = {};
+
+    if (colorMap['Background Color']) theme.background = colorMap['Background Color'];
+    if (colorMap['Foreground Color']) theme.foreground = colorMap['Foreground Color'];
+    if (colorMap['Cursor Color']) theme.cursor = colorMap['Cursor Color'];
+    if (colorMap['Cursor Text Color']) theme.cursorAccent = colorMap['Cursor Text Color'];
+    if (colorMap['Selection Color']) theme.selection = colorMap['Selection Color'];
+
+    // ANSI colors (0-15)
+    const ansiMap = [
+      'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+      'brightBlack', 'brightRed', 'brightGreen', 'brightYellow', 'brightBlue', 'brightMagenta', 'brightCyan', 'brightWhite'
+    ];
+
+    for (let i = 0; i < 16; i++) {
+      const ansiKey = `Ansi ${i} Color`;
+      if (colorMap[ansiKey]) {
+        theme[ansiMap[i]] = colorMap[ansiKey];
+      }
+    }
+
+    return theme;
+  } catch (error) {
+    console.error('Failed to parse iTerm theme:', error);
+    throw new Error('Invalid iTerm theme file format');
   }
 }
 
@@ -262,6 +319,25 @@ function setupIpcHandlers() {
   ipcMain.handle('ask-ai', async (event, prompt) => {
     const settings = loadSettings();
     return await callAI(prompt, settings);
+  });
+
+  // Utilities
+  ipcMain.handle('open-external', async (event, url) => {
+    try {
+      await electronShell.openExternal(url);
+      return true;
+    } catch (error) {
+      console.error('Failed to open external URL:', error);
+      return false;
+    }
+  });
+
+  ipcMain.handle('parse-iterm-theme', async (event, xmlContent) => {
+    try {
+      return parseItermTheme(xmlContent);
+    } catch (error: any) {
+      throw error;
+    }
   });
 }
 

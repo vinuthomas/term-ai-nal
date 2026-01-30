@@ -20,4 +20,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSettings: (settings: any) => ipcRenderer.invoke('save-settings', settings),
   getOllamaModels: (baseUrl: string) => ipcRenderer.invoke('get-ollama-models', baseUrl),
   askAI: (prompt: string) => ipcRenderer.invoke('ask-ai', prompt),
+
+  // Utilities
+  openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
+  parseItermTheme: (xmlContent: string) => ipcRenderer.invoke('parse-iterm-theme', xmlContent),
 });

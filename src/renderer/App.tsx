@@ -19,6 +19,8 @@ declare global {
       getSettings: () => Promise<any>;
       saveSettings: (settings: any) => Promise<boolean>;
       askAI: (prompt: string) => Promise<string>;
+      openExternal: (url: string) => Promise<boolean>;
+      parseItermTheme: (xmlContent: string) => Promise<any>;
     };
   }
 }

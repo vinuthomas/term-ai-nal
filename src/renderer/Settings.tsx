@@ -227,6 +227,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                 <option value="monokai">Monokai</option>
                 <option value="nord">Nord</option>
                 <option value="gruvbox-dark">Gruvbox Dark</option>
+                {theme === 'custom' && <option value="custom">Custom (Imported)</option>}
               </select>
             </div>
 
@@ -239,17 +240,42 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (file) {
-                      const text = await file.text();
-                      // Parse iTerm2 theme (basic implementation)
-                      // In a real app, you'd want more robust parsing
-                      alert('iTerm2 theme import coming soon! For now, use the built-in themes.');
+                      try {
+                        const text = await file.text();
+                        const parsedTheme = await window.electronAPI.parseItermTheme(text);
+
+                        // Save as custom theme
+                        const themeName = file.name.replace('.itermcolors', '');
+                        await window.electronAPI.saveSettings({
+                          ...await window.electronAPI.getSettings(),
+                          theme: 'custom',
+                          customTheme: parsedTheme,
+                          customThemeName: themeName,
+                        });
+
+                        setTheme('custom');
+                        window.dispatchEvent(new CustomEvent('settings-updated'));
+                        alert(`Successfully imported theme: ${themeName}`);
+                      } catch (error: any) {
+                        alert(`Failed to import theme: ${error.message}`);
+                      }
                     }
                   }}
                   style={{ ...styles.input, cursor: 'pointer' }}
                 />
               </div>
               <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
-                You can download iTerm2 color schemes from <a href="https://iterm2colorschemes.com/" target="_blank" rel="noopener noreferrer" style={{ color: '#007acc' }}>iterm2colorschemes.com</a>
+                You can download iTerm2 color schemes from{' '}
+                <a
+                  href="#"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    window.electronAPI.openExternal('https://iterm2colorschemes.com/');
+                  }}
+                  style={{ color: '#007acc', cursor: 'pointer', textDecoration: 'underline' }}
+                >
+                  iterm2colorschemes.com
+                </a>
               </small>
             </div>
 

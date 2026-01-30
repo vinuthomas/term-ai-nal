@@ -68,7 +68,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       terminalRef.current.appendChild(containerDiv);
 
       // Get theme from settings
-      const selectedTheme = themes[settings.theme] || themes.default;
+      let selectedTheme;
+      if (settings.theme === 'custom' && settings.customTheme) {
+        selectedTheme = settings.customTheme;
+      } else {
+        selectedTheme = themes[settings.theme] || themes.default;
+      }
 
       // Create new terminal
       term = new Terminal({
@@ -155,7 +160,14 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
     if (!settings || !xtermRef.current) return;
 
     const term = xtermRef.current;
-    const selectedTheme = themes[settings.theme] || themes.default;
+
+    // Get theme from settings
+    let selectedTheme;
+    if (settings.theme === 'custom' && settings.customTheme) {
+      selectedTheme = settings.customTheme;
+    } else {
+      selectedTheme = themes[settings.theme] || themes.default;
+    }
 
     // Update font size
     term.options.fontSize = settings.fontSize || 14;
