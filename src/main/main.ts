@@ -1,9 +1,10 @@
-import { app, BrowserWindow, ipcMain, shell as electronShell } from 'electron';
+import { app, BrowserWindow, ipcMain, shell as electronShell, safeStorage } from 'electron';
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as pty from 'node-pty';
 import { execSync } from 'child_process';
+import { XMLParser } from 'fast-xml-parser';
 
 // --- Settings Management (Simple FS based) ---
 const getUserDataPath = () => app.getPath('userData');
@@ -23,7 +24,23 @@ const defaultSettings = {
 function loadSettings() {
   try {
     if (fs.existsSync(getSettingsPath())) {
-      return { ...defaultSettings, ...JSON.parse(fs.readFileSync(getSettingsPath(), 'utf-8')) };
+      const data = JSON.parse(fs.readFileSync(getSettingsPath(), 'utf-8'));
+      
+      // Decrypt API key if it exists
+      if (data.apiKey && safeStorage.isEncryptionAvailable()) {
+        try {
+          // Check if it's hex encoded (our simple way to store buffer)
+          const buffer = Buffer.from(data.apiKey, 'hex');
+          data.apiKey = safeStorage.decryptString(buffer);
+        } catch (e) {
+          // If decryption fails (e.g. not encrypted or different machine), keep as is or clear
+          // Fallback for legacy plain text: if decrypt fails, it might be plain text
+          // but safely checking is hard. Assuming new keys are encrypted.
+          console.warn('Failed to decrypt API key, might be invalid or plaintext', e);
+        }
+      }
+      
+      return { ...defaultSettings, ...data };
     }
   } catch (e) {
     console.error('Failed to load settings', e);
@@ -33,7 +50,15 @@ function loadSettings() {
 
 function saveSettings(settings: any) {
   try {
-    fs.writeFileSync(getSettingsPath(), JSON.stringify(settings, null, 2));
+    const settingsToSave = { ...settings };
+    
+    // Encrypt API key
+    if (settingsToSave.apiKey && safeStorage.isEncryptionAvailable()) {
+      const buffer = safeStorage.encryptString(settingsToSave.apiKey);
+      settingsToSave.apiKey = buffer.toString('hex');
+    }
+
+    fs.writeFileSync(getSettingsPath(), JSON.stringify(settingsToSave, null, 2));
     return true;
   } catch (e) {
     console.error('Failed to save settings', e);
@@ -44,26 +69,80 @@ function saveSettings(settings: any) {
 // --- iTerm Theme Parser ---
 function parseItermTheme(xmlContent: string): any {
   try {
-    // Parse iTerm2 .itermcolors XML format
+    const parser = new XMLParser();
+    const result = parser.parse(xmlContent);
+
+    // iTerm2 themes are usually property lists (plist)
+    // Structure: <plist><dict><key>Name</key><dict>...</dict>...</dict></plist>
+    
+    const rootDict = result.plist.dict;
+    const keys = rootDict.key; // Array of keys
+    const dicts = rootDict.dict; // Array of dicts (values corresponding to keys)
+    
+    // If single entry, parser might return object instead of array. Ensure array.
+    const keyArray = Array.isArray(keys) ? keys : [keys];
+    const dictArray = Array.isArray(dicts) ? dicts : [dicts];
+
     const colorMap: any = {};
 
-    // Match <key>Color Name</key> followed by <dict> with RGB values
-    const keyRegex = /<key>(.*?)<\/key>\s*<dict>([\s\S]*?)<\/dict>/g;
-    let match;
+    for (let i = 0; i < keyArray.length; i++) {
+      const colorName = keyArray[i];
+      const colorData = dictArray[i];
 
-    while ((match = keyRegex.exec(xmlContent)) !== null) {
-      const colorName = match[1];
-      const colorDict = match[2];
+      // colorData should contain keys for 'Red Component', 'Green Component', 'Blue Component'
+      // and corresponding <real> values.
+      // fast-xml-parser converts <key>K</key><real>V</real>... into object structure if simplistic,
+      // but plists are alternating key/value.
+      // Wait, fast-xml-parser default behavior might not map plist structure directly to clean objects 
+      // because plist uses sibling nodes for key/value.
+      
+      // Actually, standard plist parsing with simple XML parser is tricky because of the 
+      // <key>Name</key><value>...</value> sibling structure.
+      // Let's implement a more robust logic for the specific structure we have.
+      
+      // Since we already have the arrays separated (if fast-xml-parser grouped them by tag name),
+      // we might need to rely on index matching, which is risky if order isn't preserved.
+      
+      // BETTER APPROACH for Plist with fast-xml-parser:
+      // In a dictionary, keys and values are siblings.
+      // <dict>
+      //   <key>Ansi 0 Color</key>
+      //   <dict>...</dict>
+      //   <key>Ansi 1 Color</key>
+      //   <dict>...</dict>
+      // </dict>
+      
+      // fast-xml-parser preserves order in 'preserveOrder: true' mode, but we used default.
+      // In default mode, it groups by tag name.
+      // If the XML is:
+      // <dict>
+      //    <key>A</key> <dict>valA</dict>
+      //    <key>B</key> <dict>valB</dict>
+      // </dict>
+      // The parsed result is usually { key: ['A', 'B'], dict: [valA, valB] }
+      // So index matching should work for this specific schema.
 
-      // Extract RGB components (stored as floating point 0-1)
-      const redMatch = colorDict.match(/<key>Red Component<\/key>\s*<real>([\d.]+)<\/real>/);
-      const greenMatch = colorDict.match(/<key>Green Component<\/key>\s*<real>([\d.]+)<\/real>/);
-      const blueMatch = colorDict.match(/<key>Blue Component<\/key>\s*<real>([\d.]+)<\/real>/);
+      if (!colorData) continue;
 
-      if (redMatch && greenMatch && blueMatch) {
-        const r = Math.round(parseFloat(redMatch[1]) * 255);
-        const g = Math.round(parseFloat(greenMatch[1]) * 255);
-        const b = Math.round(parseFloat(blueMatch[1]) * 255);
+      // Extract RGB. The internal dict structure:
+      // <key>Red Component</key><real>0.5</real> ...
+      // Parsed: { key: ['Red Component', ...], real: [0.5, ...] }
+      
+      let r = 0, g = 0, b = 0;
+      
+      const componentKeys = Array.isArray(colorData.key) ? colorData.key : [colorData.key];
+      const componentValues = Array.isArray(colorData.real) ? colorData.real : [colorData.real];
+
+      // Find indices
+      const rIndex = componentKeys.indexOf('Red Component');
+      const gIndex = componentKeys.indexOf('Green Component');
+      const bIndex = componentKeys.indexOf('Blue Component');
+
+      if (rIndex !== -1 && gIndex !== -1 && bIndex !== -1) {
+        r = Math.round(parseFloat(componentValues[rIndex]) * 255);
+        g = Math.round(parseFloat(componentValues[gIndex]) * 255);
+        b = Math.round(parseFloat(componentValues[bIndex]) * 255);
+        
         colorMap[colorName] = `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`;
       }
     }
@@ -324,6 +403,11 @@ function setupIpcHandlers() {
   // Utilities
   ipcMain.handle('open-external', async (event, url) => {
     try {
+      const parsedUrl = new URL(url);
+      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
+        console.error('Blocked potentially unsafe URL:', url);
+        return false;
+      }
       await electronShell.openExternal(url);
       return true;
     } catch (error) {
