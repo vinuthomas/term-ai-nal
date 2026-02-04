@@ -117,7 +117,7 @@ const App: React.FC = () => {
 
   // --- Listeners ---
   useEffect(() => {
-    window.electronAPI.onTerminalData((id, data) => {
+    const cleanupData = window.electronAPI.onTerminalData((id, data) => {
       const event = new CustomEvent('terminal-data-event', { detail: { id, data } });
       window.dispatchEvent(event);
     });
@@ -133,6 +133,7 @@ const App: React.FC = () => {
 
     window.addEventListener('resize', handleWindowResize);
     return () => {
+      cleanupData();
       window.removeEventListener('resize', handleWindowResize);
       clearTimeout(resizeTimeout);
     };
@@ -140,7 +141,7 @@ const App: React.FC = () => {
 
   // Handle terminal exit separately to avoid dependency issues
   useEffect(() => {
-    window.electronAPI.onTerminalExit((id) => {
+    const cleanupExit = window.electronAPI.onTerminalExit((id) => {
       const shouldClose = window.confirm(
         'Terminal session ended. Would you like to close this pane?'
       );
@@ -168,6 +169,8 @@ const App: React.FC = () => {
         setTerminals(prev => prev.filter(t => t !== id));
       }
     });
+
+    return () => cleanupExit();
   }, []);
 
   // --- Layout Actions ---

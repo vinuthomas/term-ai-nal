@@ -89,6 +89,11 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       term.open(containerDiv);
       fitAddon.fit();
 
+      // Send input to PTY (register only once)
+      term.onData((data) => {
+        window.electronAPI.sendTerminalInput(id, data);
+      });
+
       // Store in global map
       globalTerminals.set(id, { term, fitAddon, containerDiv });
 
@@ -98,11 +103,6 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
-
-    // Send input to PTY
-    term.onData((data) => {
-      window.electronAPI.sendTerminalInput(id, data);
-    });
 
     // Handle Resize via ResizeObserver for robust layout changes
     let resizeTimeout: NodeJS.Timeout;
