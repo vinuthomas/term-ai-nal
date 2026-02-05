@@ -74,7 +74,7 @@ Built applications will be in the `release/` directory:
 - `Term-AI-nal-1.0.0-arm64-mac.zip` - Apple Silicon app bundle
 - `Term-AI-nal-1.0.0-x64-mac.zip` - Intel app bundle
 
-> **Note for macOS Users:** If you download a pre-built binary and see a warning that the developer cannot be verified:
+> **Note for macOS Users:** If you download a pre-built binary downloaded from the release section and see a warning that the developer cannot be verified:
 > 1. Right-click (or Control-click) the app icon and select **Open**.
 > 2. Click **Open** in the dialog that follows.
 > 3. Alternatively, run `sudo xattr -rd com.apple.quarantine /Applications/term-ai-nal.app` in your terminal.
