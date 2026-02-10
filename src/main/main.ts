@@ -3,7 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
 import * as pty from 'node-pty';
-import { execSync } from 'child_process';
+import { execFileSync } from 'child_process';
 import { XMLParser } from 'fast-xml-parser';
 
 // --- Settings Management (Simple FS based) ---
@@ -58,7 +58,7 @@ function saveSettings(settings: any) {
       settingsToSave.apiKey = buffer.toString('hex');
     }
 
-    fs.writeFileSync(getSettingsPath(), JSON.stringify(settingsToSave, null, 2));
+    fs.writeFileSync(getSettingsPath(), JSON.stringify(settingsToSave, null, 2), { mode: 0o600 });
     return true;
   } catch (e) {
     console.error('Failed to save settings', e);
@@ -278,10 +278,11 @@ CRITICAL RULES:
       return data.message.content.trim();
     }
   } catch (error: any) {
-    return `echo "Error: ${error.message}"`;
+    const safeMessage = (error.message || 'Unknown error').replace(/[^a-zA-Z0-9 _.:-]/g, '');
+    return `COMMAND: echo "AI Error: ${safeMessage}"\nEXPLANATION: AI service request failed`;
   }
-  
-  return `echo "Provider not supported"`;
+
+  return `COMMAND: echo "Provider not configured"\nEXPLANATION: Select an AI provider in settings`;
 }
 
 
@@ -295,7 +296,7 @@ function getCwd(pid: number): string {
   try {
     if (os.platform() === 'darwin') {
       // macOS: Use lsof to get the current working directory
-      const output = execSync(`lsof -a -d cwd -p ${pid} -Fn`, { encoding: 'utf8' });
+      const output = execFileSync('lsof', ['-a', '-d', 'cwd', '-p', String(pid), '-Fn'], { encoding: 'utf8' });
       const match = output.match(/n(.+)/);
       return match ? match[1] : process.env.HOME || '/';
     } else if (os.platform() === 'linux') {
