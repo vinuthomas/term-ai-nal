@@ -14,6 +14,24 @@ interface TerminalPaneProps {
 // Global store for terminal instances AND their container divs
 const globalTerminals = new Map<string, { term: Terminal, fitAddon: FitAddon, containerDiv: HTMLDivElement }>();
 
+// Prioritized Unicode-capable font stack covering macOS, Windows, and Linux.
+// Nerd Fonts first (user-installed, cross-platform), then platform system fonts.
+const DEFAULT_FONT_FAMILY =
+  // Nerd Font variants (user-installed, best Unicode + icon coverage)
+  '"MesloLGS NF", "Hack Nerd Font Mono", "FiraCode Nerd Font Mono", ' +
+  '"JetBrainsMono Nerd Font Mono", "CaskaydiaCove Nerd Font Mono", ' +
+  '"SauceCodePro Nerd Font Mono", ' +
+  // Cross-platform developer fonts
+  '"Fira Code", "JetBrains Mono", "Cascadia Code", "Cascadia Mono", ' +
+  // macOS system fonts
+  'Menlo, Monaco, "SF Mono", ' +
+  // Windows system fonts (Consolas > Lucida Console for Unicode coverage)
+  'Consolas, "Lucida Console", ' +
+  // Linux system fonts
+  '"DejaVu Sans Mono", "Ubuntu Mono", "Liberation Mono", "FreeMono", ' +
+  // Final fallback
+  '"Courier New", monospace';
+
 const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<Terminal | null>(null);
@@ -75,11 +93,15 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
         selectedTheme = themes[settings.theme] || themes.default;
       }
 
+      // Build font family: user override > broad Unicode-capable stack
+      const fontFamily = settings.fontFamily || DEFAULT_FONT_FAMILY;
+
       // Create new terminal
       term = new Terminal({
         cursorBlink: true,
         fontSize: settings.fontSize || 14,
-        fontFamily: 'Menlo, Monaco, "Courier New", monospace',
+        fontFamily,
+        unicodeVersion: '11',
         theme: selectedTheme,
         allowProposedApi: true,
       });
@@ -169,8 +191,9 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       selectedTheme = themes[settings.theme] || themes.default;
     }
 
-    // Update font size
+    // Update font size and family
     term.options.fontSize = settings.fontSize || 14;
+    term.options.fontFamily = settings.fontFamily || DEFAULT_FONT_FAMILY;
 
     // Update theme
     if (selectedTheme) {
