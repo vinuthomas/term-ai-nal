@@ -13,7 +13,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   const [baseUrl, setBaseUrl] = useState('');
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
   const [fontSize, setFontSize] = useState(14);
+  const [fontFamily, setFontFamily] = useState('');
   const [theme, setTheme] = useState('default');
+  const [restoreSession, setRestoreSession] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -24,7 +26,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       setModel(s.model || '');
       setBaseUrl(s.baseUrl || '');
       setFontSize(s.fontSize || 14);
+      setFontFamily(s.fontFamily || '');
       setTheme(s.theme || 'default');
+      setRestoreSession(s.restoreSession || false);
       setLoading(false);
 
       if (s.provider === 'ollama') {
@@ -60,7 +64,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       model,
       baseUrl,
       fontSize,
-      theme
+      fontFamily,
+      theme,
+      restoreSession
     });
     // Trigger terminal refresh to apply new settings
     window.dispatchEvent(new CustomEvent('settings-updated'));
@@ -213,6 +219,20 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             </div>
 
             <div style={styles.group}>
+              <label style={styles.label}>Font Family</label>
+              <input
+                type="text"
+                value={fontFamily}
+                onChange={(e) => setFontFamily(e.target.value)}
+                style={styles.input}
+                placeholder="Leave empty for auto-detect (Nerd Fonts → Menlo fallback)"
+              />
+              <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
+                e.g. "MesloLGS NF" or "Hack Nerd Font Mono" for full Unicode/icon support
+              </small>
+            </div>
+
+            <div style={styles.group}>
               <label style={styles.label}>Color Theme</label>
               <select
                 value={theme}
@@ -276,6 +296,47 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                 >
                   iterm2colorschemes.com
                 </a>
+              </small>
+            </div>
+
+            <div style={styles.group}>
+              <label style={styles.label}>Session Restore</label>
+              <div
+                onClick={() => setRestoreSession(!restoreSession)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '12px',
+                  cursor: 'pointer',
+                  padding: '8px 0',
+                }}
+              >
+                <div style={{
+                  width: '40px',
+                  height: '22px',
+                  borderRadius: '11px',
+                  backgroundColor: restoreSession ? '#007acc' : '#3e3e42',
+                  position: 'relative' as const,
+                  transition: 'background-color 0.2s',
+                  flexShrink: 0,
+                }}>
+                  <div style={{
+                    width: '18px',
+                    height: '18px',
+                    borderRadius: '50%',
+                    backgroundColor: '#fff',
+                    position: 'absolute' as const,
+                    top: '2px',
+                    left: restoreSession ? '20px' : '2px',
+                    transition: 'left 0.2s',
+                  }} />
+                </div>
+                <span style={{ color: '#ddd', fontSize: '14px' }}>
+                  Restore pane layout on startup
+                </span>
+              </div>
+              <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
+                When enabled, your pane layout and working directories will be restored when you reopen the app. Shell history and running processes are not preserved.
               </small>
             </div>
 

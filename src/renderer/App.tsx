@@ -21,6 +21,11 @@ declare global {
       askAI: (prompt: string) => Promise<string>;
       openExternal: (url: string) => Promise<boolean>;
       parseItermTheme: (xmlContent: string) => Promise<any>;
+      saveSession: (sessionData: any) => Promise<boolean>;
+      loadSession: () => Promise<any>;
+      clearSession: () => Promise<boolean>;
+      getAllTerminalCwds: () => Promise<Record<string, string>>;
+      getOllamaModels: (baseUrl: string) => Promise<string[]>;
     };
   }
 }
@@ -63,6 +68,52 @@ const findPaneIdByNumber = (root: LayoutNode, paneNumber: number): string | null
     }
   }
   return null;
+};
+
+// Collect all pane IDs from layout tree
+const collectPaneIds = (node: LayoutNode): string[] => {
+  if (node.type === 'pane' && node.paneId) return [node.paneId];
+  if (node.children) return node.children.flatMap(collectPaneIds);
+  return [];
+};
+
+// Get the highest pane number in the layout tree
+const getMaxPaneNumber = (node: LayoutNode): number => {
+  if (node.type === 'pane') return node.paneNumber || 0;
+  if (node.children) return Math.max(0, ...node.children.map(getMaxPaneNumber));
+  return 0;
+};
+
+// Assign new unique pane IDs to a restored layout (avoids conflicts with timestamp-based IDs)
+const reassignPaneIds = (node: LayoutNode): { node: LayoutNode, paneIds: string[] } => {
+  if (node.type === 'pane') {
+    const newPaneId = `term-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+    return {
+      node: { ...node, id: `node-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, paneId: newPaneId },
+      paneIds: [newPaneId]
+    };
+  }
+  if (node.children) {
+    const results = node.children.map(reassignPaneIds);
+    return {
+      node: { ...node, children: results.map(r => r.node) },
+      paneIds: results.flatMap(r => r.paneIds)
+    };
+  }
+  return { node, paneIds: [] };
+};
+
+// Update CWDs in a layout tree from a cwdMap (keyed by pane index order)
+const applyCwdsToLayout = (node: LayoutNode, cwds: string[], index: { i: number }): LayoutNode => {
+  if (node.type === 'pane') {
+    const cwd = cwds[index.i] || undefined;
+    index.i++;
+    return { ...node, cwd };
+  }
+  if (node.children) {
+    return { ...node, children: node.children.map(c => applyCwdsToLayout(c, cwds, index)) };
+  }
+  return node;
 };
 
 const App: React.FC = () => {
@@ -114,6 +165,80 @@ const App: React.FC = () => {
       console.error('Failed to save prompt history:', e);
     }
   }, [promptHistory]);
+
+  // --- Session Restore on Mount ---
+  const [sessionRestored, setSessionRestored] = useState(false);
+
+  useEffect(() => {
+    const restoreSession = async () => {
+      try {
+        const settings = await window.electronAPI.getSettings();
+        if (!settings.restoreSession) {
+          setSessionRestored(true);
+          return;
+        }
+
+        const session = await window.electronAPI.loadSession();
+        if (!session || !session.layout) {
+          setSessionRestored(true);
+          return;
+        }
+
+        // Reassign fresh pane IDs to the restored layout
+        const { node: restoredLayout, paneIds } = reassignPaneIds(session.layout);
+
+        // Apply saved CWDs to the restored layout (in pane order)
+        const layoutWithCwds = session.cwds
+          ? applyCwdsToLayout(restoredLayout, session.cwds, { i: 0 })
+          : restoredLayout;
+
+        // Close the default terminal that was created on initial render
+        window.dispatchEvent(new CustomEvent('terminal-close-event', { detail: { id: 'term-1' } }));
+        window.electronAPI.closeTerminal('term-1');
+
+        setLayout(layoutWithCwds);
+        setTerminals(paneIds);
+        setActivePaneId(paneIds[0] || 'term-1');
+        setNextPaneNumber(getMaxPaneNumber(layoutWithCwds) + 1);
+
+        // Clear the saved session after restoring (one-time use)
+        await window.electronAPI.clearSession();
+      } catch (e) {
+        console.error('Failed to restore session:', e);
+      } finally {
+        setSessionRestored(true);
+      }
+    };
+
+    restoreSession();
+  }, []);
+
+  // --- Session Save on Layout Changes (debounced) ---
+  useEffect(() => {
+    const saveSessionDebounced = setTimeout(async () => {
+      try {
+        const settings = await window.electronAPI.getSettings();
+        if (!settings.restoreSession) return;
+
+        // Get current CWDs from all terminals
+        const cwdMap = await window.electronAPI.getAllTerminalCwds();
+
+        // Collect pane IDs in layout order and map to CWDs
+        const paneIds = collectPaneIds(layout);
+        const cwds = paneIds.map(id => cwdMap[id] || '');
+
+        await window.electronAPI.saveSession({
+          layout,
+          cwds,
+          activePaneIndex: paneIds.indexOf(activePaneId),
+        });
+      } catch (e) {
+        console.error('Failed to save session:', e);
+      }
+    }, 1000); // Debounce 1 second
+
+    return () => clearTimeout(saveSessionDebounced);
+  }, [layout, activePaneId]);
 
   // --- Listeners ---
   useEffect(() => {
@@ -540,23 +665,23 @@ const App: React.FC = () => {
       {/* Toolbar */}
       <div style={styles.toolbar}>
         <button onClick={() => splitPane('horizontal', 'after')} style={styles.toolBtn} title="Split Right (Cmd+T)">
-            <ArrowRight size={18} color="#666" />
+            <ArrowRight size={18} color="#999" />
         </button>
         <button onClick={() => splitPane('horizontal', 'before')} style={styles.toolBtn} title="Split Left (Cmd+Alt+T)">
-            <ArrowLeft size={18} color="#666" />
+            <ArrowLeft size={18} color="#999" />
         </button>
         <button onClick={() => splitPane('vertical', 'after')} style={styles.toolBtn} title="Split Down (Cmd+Shift+T)">
-            <ArrowDown size={18} color="#666" />
+            <ArrowDown size={18} color="#999" />
         </button>
         <button onClick={() => splitPane('vertical', 'before')} style={styles.toolBtn} title="Split Up (Cmd+Shift+Alt+T)">
-            <ArrowUp size={18} color="#666" />
+            <ArrowUp size={18} color="#999" />
         </button>
         <div style={styles.divider} />
         <button onClick={() => setShowHelp(true)} style={styles.toolBtn} title="Keyboard Shortcuts">
-            <HelpCircle size={20} color="#666" />
+            <HelpCircle size={20} color="#999" />
         </button>
         <button onClick={() => setShowSettings(true)} style={styles.toolBtn} title="Settings">
-            <SettingsIcon size={20} color="#666" />
+            <SettingsIcon size={20} color="#999" />
         </button>
       </div>
 

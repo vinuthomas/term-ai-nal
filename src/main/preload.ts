@@ -34,4 +34,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Utilities
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),
   parseItermTheme: (xmlContent: string) => ipcRenderer.invoke('parse-iterm-theme', xmlContent),
+
+  // Session persistence
+  saveSession: (sessionData: any) => ipcRenderer.invoke('save-session', sessionData),
+  loadSession: () => ipcRenderer.invoke('load-session'),
+  clearSession: () => ipcRenderer.invoke('clear-session'),
+  getAllTerminalCwds: () => ipcRenderer.invoke('get-all-terminal-cwds'),
 });

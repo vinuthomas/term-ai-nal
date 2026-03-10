@@ -16,9 +16,11 @@ const defaultSettings = {
   model: 'gpt-4o',
   baseUrl: '', // For Ollama or custom endpoints
   fontSize: 14,
+  fontFamily: '', // Empty = auto-detect Unicode-compatible font stack
   theme: 'default', // 'default', 'dracula', 'solarized-dark', 'one-dark', 'custom'
   customTheme: null, // For imported iTerm themes
   customThemeName: '', // Name of imported theme
+  restoreSession: false, // Restore pane layout and working directories on startup
 };
 
 function loadSettings() {
@@ -63,6 +65,42 @@ function saveSettings(settings: any) {
   } catch (e) {
     console.error('Failed to save settings', e);
     return false;
+  }
+}
+
+// --- Session Persistence ---
+const getSessionPath = () => path.join(getUserDataPath(), 'session.json');
+
+function saveSession(sessionData: any) {
+  try {
+    fs.writeFileSync(getSessionPath(), JSON.stringify(sessionData, null, 2), { mode: 0o600 });
+    return true;
+  } catch (e) {
+    console.error('Failed to save session', e);
+    return false;
+  }
+}
+
+function loadSession() {
+  try {
+    const sessionPath = getSessionPath();
+    if (fs.existsSync(sessionPath)) {
+      return JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+    }
+  } catch (e) {
+    console.error('Failed to load session', e);
+  }
+  return null;
+}
+
+function clearSession() {
+  try {
+    const sessionPath = getSessionPath();
+    if (fs.existsSync(sessionPath)) {
+      fs.unlinkSync(sessionPath);
+    }
+  } catch (e) {
+    console.error('Failed to clear session', e);
   }
 }
 
@@ -424,6 +462,20 @@ function setupIpcHandlers() {
       throw error;
     }
   });
+
+  // Session persistence
+  ipcMain.handle('save-session', (event, sessionData) => saveSession(sessionData));
+  ipcMain.handle('load-session', () => loadSession());
+  ipcMain.handle('clear-session', () => { clearSession(); return true; });
+
+  // Get CWDs for all active terminals at once (used during session save)
+  ipcMain.handle('get-all-terminal-cwds', () => {
+    const cwds: Record<string, string> = {};
+    for (const [id, ptyProcess] of ptyProcesses) {
+      cwds[id] = getCwd(ptyProcess.pid);
+    }
+    return cwds;
+  });
 }
 
 function createWindow() {
@@ -457,6 +509,42 @@ function createWindow() {
 app.whenReady().then(() => {
   setupIpcHandlers();
   createWindow();
+});
+
+// Before quitting, update the saved session with the latest CWDs
+app.on('before-quit', () => {
+  try {
+    const settings = loadSettings();
+    if (!settings.restoreSession) return;
+
+    const session = loadSession();
+    if (!session || !session.layout) return;
+
+    // Update CWDs with the latest values from active PTYs
+    const cwds: string[] = [];
+    const collectPaneIdsFromLayout = (node: any): string[] => {
+      if (node.type === 'pane' && node.paneId) return [node.paneId];
+      if (node.children) return node.children.flatMap(collectPaneIdsFromLayout);
+      return [];
+    };
+
+    const paneIds = collectPaneIdsFromLayout(session.layout);
+    for (const id of paneIds) {
+      const ptyProcess = ptyProcesses.get(id);
+      if (ptyProcess) {
+        cwds.push(getCwd(ptyProcess.pid));
+      } else {
+        // Fall back to the previously saved CWD
+        const index = paneIds.indexOf(id);
+        cwds.push(session.cwds?.[index] || process.env.HOME || '/');
+      }
+    }
+
+    session.cwds = cwds;
+    saveSession(session);
+  } catch (e) {
+    console.error('Failed to update session CWDs on quit:', e);
+  }
 });
 
 app.on('window-all-closed', () => {
