@@ -40,6 +40,101 @@ npm run dev:electron
    - "delete all files" (Test the safety check!)
 4. Review the generated command and click **Execute** to run it in the terminal.
 
+## MCP Server
+
+Term-AI-nal exposes a built-in **Model Context Protocol (MCP)** server that lets external AI agents and tools interact with your terminal panes — read their output, list open panes, and send input.
+
+The server starts automatically when the app launches and listens at:
+
+```
+http://127.0.0.1:57320/mcp
+```
+
+### Available Tools
+
+| Tool | Description |
+|---|---|
+| `list_terminals` | List all open panes with their ID, label, and current working directory |
+| `get_terminal_output` | Get the buffered text output of a specific pane by ID |
+| `get_active_terminal_output` | Get the buffered text output of the currently focused pane |
+| `send_input_to_terminal` | Send text or a command to a specific pane |
+
+### Connecting an MCP Client
+
+#### OpenCode
+
+Add the following to your `~/.config/opencode/opencode.jsonc`:
+
+```json
+{
+  "mcp": {
+    "ai-term": {
+      "type": "remote",
+      "url": "http://127.0.0.1:57320/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+Then reference it in your prompts:
+
+```
+use ai-term to check what's running in my terminal
+```
+
+#### Claude Desktop
+
+Add to your `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "ai-term": {
+      "url": "http://127.0.0.1:57320/mcp"
+    }
+  }
+}
+```
+
+### Testing the MCP Server Manually
+
+Use `curl` to verify the server is running while the app is open:
+
+```bash
+# Server info
+curl http://127.0.0.1:57320/
+
+# List available tools
+curl -s -X POST http://127.0.0.1:57320/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# List open terminal panes
+curl -s -X POST http://127.0.0.1:57320/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"list_terminals","arguments":{}}}'
+
+# Get output from a specific pane (last 50 lines)
+curl -s -X POST http://127.0.0.1:57320/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"get_terminal_output","arguments":{"terminal_id":"term-1","lines":50}}}'
+
+# Send a command to a pane
+curl -s -X POST http://127.0.0.1:57320/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"send_input_to_terminal","arguments":{"terminal_id":"term-1","text":"echo hello\n"}}}'
+```
+
+### Protocol Details
+
+- **Transport:** Streamable HTTP (JSON-RPC 2.0)
+- **Endpoint:** `POST http://127.0.0.1:57320/mcp`
+- **Protocol version:** `2024-11-05`
+- **Output buffer:** Up to 500 KB per pane, ANSI escape codes stripped
+
+---
+
 ## Building & Distribution
 
 ### Build Commands
