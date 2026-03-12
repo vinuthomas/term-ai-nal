@@ -126,11 +126,11 @@ const App: React.FC = () => {
     id: 'root',
     type: 'group',
     direction: 'horizontal',
-    children: [{ id: 'node-1', type: 'pane', paneId: 'term-1', paneNumber: 1 }]
+    children: []
   });
 
-  const [activePaneId, setActivePaneId] = useState<string>('term-1');
-  const [terminals, setTerminals] = useState<string[]>(['term-1']); // Keep track of active terminal IDs for cleanup
+  const [activePaneId, setActivePaneId] = useState<string>('');
+  const [terminals, setTerminals] = useState<string[]>([]); // Keep track of active terminal IDs for cleanup
   const [nextPaneNumber, setNextPaneNumber] = useState<number>(2); // Counter for pane numbers
   const [paneLabels, setPaneLabels] = useState<Record<string, string>>({}); // Custom labels for panes
   const [renamingPaneId, setRenamingPaneId] = useState<string | null>(null); // ID of pane being renamed
@@ -189,12 +189,20 @@ const App: React.FC = () => {
       try {
         const settings = await window.electronAPI.getSettings();
         if (!settings.restoreSession) {
+          const freshId = 'term-1';
+          setLayout({ id: 'root', type: 'group', direction: 'horizontal', children: [{ id: 'node-1', type: 'pane', paneId: freshId, paneNumber: 1 }] });
+          setTerminals([freshId]);
+          setActivePaneId(freshId);
           setSessionRestored(true);
           return;
         }
 
         const session = await window.electronAPI.loadSession();
         if (!session || !session.layout) {
+          const freshId = 'term-1';
+          setLayout({ id: 'root', type: 'group', direction: 'horizontal', children: [{ id: 'node-1', type: 'pane', paneId: freshId, paneNumber: 1 }] });
+          setTerminals([freshId]);
+          setActivePaneId(freshId);
           setSessionRestored(true);
           return;
         }
@@ -220,19 +228,23 @@ const App: React.FC = () => {
           setPaneLabels(restoredLabels);
         }
 
-        // Close the default terminal that was created on initial render
-        window.dispatchEvent(new CustomEvent('terminal-close-event', { detail: { id: 'term-1' } }));
-        window.electronAPI.closeTerminal('term-1');
-
+        // Apply state
         setLayout(layoutWithCwds);
         setTerminals(paneIds);
-        setActivePaneId(paneIds[0] || 'term-1');
+        const savedIndex = session.activePaneIndex ?? 0;
+        setActivePaneId(paneIds[savedIndex] || paneIds[0] || '');
         setNextPaneNumber(getMaxPaneNumber(layoutWithCwds) + 1);
 
-        // Clear the saved session after restoring (one-time use)
-        await window.electronAPI.clearSession();
+        // Do NOT clear the session here — the debounced save effect will
+        // immediately overwrite it with the new (reassigned) pane IDs,
+        // keeping session.json always current for the before-quit handler.
       } catch (e) {
         console.error('Failed to restore session:', e);
+        // Fallback: boot with a fresh single pane so the UI is never blank
+        const freshId = 'term-1';
+        setLayout({ id: 'root', type: 'group', direction: 'horizontal', children: [{ id: 'node-1', type: 'pane', paneId: freshId, paneNumber: 1 }] });
+        setTerminals([freshId]);
+        setActivePaneId(freshId);
       } finally {
         setSessionRestored(true);
       }
@@ -243,6 +255,10 @@ const App: React.FC = () => {
 
   // --- Session Save on Layout Changes (debounced) ---
   useEffect(() => {
+    // Don't save until the session restore attempt is complete, to avoid
+    // overwriting the on-disk session with the empty initial layout.
+    if (!sessionRestored) return;
+
     const saveSessionDebounced = setTimeout(async () => {
       try {
         const settings = await window.electronAPI.getSettings();
@@ -267,7 +283,7 @@ const App: React.FC = () => {
     }, 1000); // Debounce 1 second
 
     return () => clearTimeout(saveSessionDebounced);
-  }, [layout, activePaneId, paneLabels]);
+  }, [layout, activePaneId, paneLabels, sessionRestored]);
 
   // --- Listeners ---
   useEffect(() => {
@@ -790,7 +806,7 @@ const App: React.FC = () => {
 
       {/* Layout Root */}
       <div style={styles.terminalContainer}>
-        {renderNode(layout)}
+        {sessionRestored ? renderNode(layout) : null}
       </div>
 
       {/* AI Bar */}
