@@ -26,6 +26,8 @@ declare global {
       clearSession: () => Promise<boolean>;
       getAllTerminalCwds: () => Promise<Record<string, string>>;
       getOllamaModels: (baseUrl: string) => Promise<string[]>;
+      setMcpActivePane: (id: string) => void;
+      setMcpPaneLabels: (labels: Record<string, string>) => void;
     };
   }
 }
@@ -39,6 +41,7 @@ type LayoutNode = {
   paneId?: string; // For pane (the actual terminal ID)
   cwd?: string; // For pane (current working directory)
   paneNumber?: number; // For pane (display number for keyboard shortcuts)
+  label?: string; // For pane (user-defined name)
 };
 
 // --- Helper Functions for Tree Manipulation ---
@@ -129,6 +132,9 @@ const App: React.FC = () => {
   const [activePaneId, setActivePaneId] = useState<string>('term-1');
   const [terminals, setTerminals] = useState<string[]>(['term-1']); // Keep track of active terminal IDs for cleanup
   const [nextPaneNumber, setNextPaneNumber] = useState<number>(2); // Counter for pane numbers
+  const [paneLabels, setPaneLabels] = useState<Record<string, string>>({}); // Custom labels for panes
+  const [renamingPaneId, setRenamingPaneId] = useState<string | null>(null); // ID of pane being renamed
+  const [renameValue, setRenameValue] = useState<string>(''); // Current rename input value
 
   const [aiInput, setAiInput] = useState('');
   const [originalRequest, setOriginalRequest] = useState('');
@@ -166,6 +172,15 @@ const App: React.FC = () => {
     }
   }, [promptHistory]);
 
+  // --- Sync MCP metadata to main process ---
+  useEffect(() => {
+    window.electronAPI.setMcpActivePane(activePaneId);
+  }, [activePaneId]);
+
+  useEffect(() => {
+    window.electronAPI.setMcpPaneLabels(paneLabels);
+  }, [paneLabels]);
+
   // --- Session Restore on Mount ---
   const [sessionRestored, setSessionRestored] = useState(false);
 
@@ -191,6 +206,19 @@ const App: React.FC = () => {
         const layoutWithCwds = session.cwds
           ? applyCwdsToLayout(restoredLayout, session.cwds, { i: 0 })
           : restoredLayout;
+
+        // Restore pane labels if saved (map old pane IDs -> new pane IDs by position)
+        if (session.paneLabels && session.layout) {
+          const oldPaneIds = collectPaneIds(session.layout);
+          const restoredLabels: Record<string, string> = {};
+          oldPaneIds.forEach((oldId, i) => {
+            const newId = paneIds[i];
+            if (newId && session.paneLabels[oldId]) {
+              restoredLabels[newId] = session.paneLabels[oldId];
+            }
+          });
+          setPaneLabels(restoredLabels);
+        }
 
         // Close the default terminal that was created on initial render
         window.dispatchEvent(new CustomEvent('terminal-close-event', { detail: { id: 'term-1' } }));
@@ -231,6 +259,7 @@ const App: React.FC = () => {
           layout,
           cwds,
           activePaneIndex: paneIds.indexOf(activePaneId),
+          paneLabels,
         });
       } catch (e) {
         console.error('Failed to save session:', e);
@@ -238,7 +267,7 @@ const App: React.FC = () => {
     }, 1000); // Debounce 1 second
 
     return () => clearTimeout(saveSessionDebounced);
-  }, [layout, activePaneId]);
+  }, [layout, activePaneId, paneLabels]);
 
   // --- Listeners ---
   useEffect(() => {
@@ -394,10 +423,41 @@ const App: React.FC = () => {
        if (remaining.length > 0) setActivePaneId(remaining[0]);
     }
 
+    // Clean up label for closed pane
+    setPaneLabels(prev => {
+      const next = { ...prev };
+      delete next[targetPaneId];
+      return next;
+    });
+
     // Trigger resize after layout settles
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent('terminal-layout-change'));
     }, 100);
+  };
+
+  // --- Rename Logic ---
+  const startRenaming = (paneId: string) => {
+    setRenamingPaneId(paneId);
+    setRenameValue(paneLabels[paneId] || '');
+  };
+
+  const commitRename = (paneId: string) => {
+    const trimmed = renameValue.trim();
+    setPaneLabels(prev => {
+      if (trimmed) return { ...prev, [paneId]: trimmed };
+      // Remove label if empty (revert to default)
+      const next = { ...prev };
+      delete next[paneId];
+      return next;
+    });
+    setRenamingPaneId(null);
+    setRenameValue('');
+  };
+
+  const cancelRename = () => {
+    setRenamingPaneId(null);
+    setRenameValue('');
   };
 
   // --- AI Logic ---
@@ -594,37 +654,64 @@ const App: React.FC = () => {
   // --- Recursive Renderer ---
   const renderNode = (node: LayoutNode) => {
     if (node.type === 'pane' && node.paneId) {
+      const paneId = node.paneId;
+      const isActive = activePaneId === paneId;
+      const isRenaming = renamingPaneId === paneId;
+      const label = paneLabels[paneId] || `Terminal ${node.paneNumber ?? ''}`.trim();
+
       return (
         <div
-          key={node.paneId}
+          key={paneId}
           style={{ width: '100%', height: '100%', position: 'relative', display: 'flex', flexDirection: 'column' }}
-          onClick={() => setActivePaneId(node.paneId!)}
+          onClick={() => setActivePaneId(paneId)}
         >
-           <div style={{
-               ...styles.activeIndicator, 
-               backgroundColor: activePaneId === node.paneId ? '#50fa7b' : 'transparent'
-           }} />
-           <TerminalPane
-              id={node.paneId}
-              isActive={activePaneId === node.paneId}
-              cwd={node.cwd}
-              onData={() => {}}
-           />
-           {/* Pane number indicator */}
-           {node.paneNumber && (
-             <div style={styles.paneNumberBadge}>
-               {node.paneNumber}
-             </div>
-           )}
-           {/* Close button */}
-           {terminals.length > 1 && (
-             <button
-                onClick={(e) => { e.stopPropagation(); closePane(node.paneId!); }}
+          {/* Pane title bar */}
+          <div style={{
+            ...styles.paneTitleBar,
+            borderTopColor: isActive ? '#50fa7b' : '#333',
+          }}>
+            {isRenaming ? (
+              <input
+                autoFocus
+                style={styles.renameInput}
+                value={renameValue}
+                onChange={(e) => setRenameValue(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') { e.stopPropagation(); commitRename(paneId); }
+                  if (e.key === 'Escape') { e.stopPropagation(); cancelRename(); }
+                }}
+                onBlur={() => commitRename(paneId)}
+                onClick={(e) => e.stopPropagation()}
+                placeholder="Terminal name..."
+              />
+            ) : (
+              <span
+                style={styles.paneTitleLabel}
+                title="Double-click to rename"
+                onDoubleClick={(e) => { e.stopPropagation(); startRenaming(paneId); }}
+              >
+                {label}
+              </span>
+            )}
+            {/* Close button */}
+            {terminals.length > 1 && (
+              <button
+                onClick={(e) => { e.stopPropagation(); closePane(paneId); }}
                 style={styles.closePaneBtn}
-             >
-                 <X size={12} />
-             </button>
-           )}
+                title="Close pane"
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+          <div style={{ flex: 1, overflow: 'hidden', minHeight: 0 }}>
+            <TerminalPane
+               id={paneId}
+               isActive={isActive}
+               cwd={node.cwd}
+               onData={() => {}}
+            />
+          </div>
         </div>
       );
     }
@@ -822,46 +909,55 @@ const styles: { [key: string]: React.CSSProperties } = {
     zIndex: 20,
     transition: 'background-color 0.2s',
   },
-  activeIndicator: {
-      height: '2px',
-      width: '100%',
-      position: 'absolute',
-      top: 0,
-      left: 0,
+  paneTitleBar: {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      height: '24px',
+      minHeight: '24px',
+      paddingLeft: '8px',
+      paddingRight: '4px',
+      backgroundColor: '#252525',
+      borderTop: '2px solid #333',
+      userSelect: 'none',
+      flexShrink: 0,
       zIndex: 5,
   },
-  paneNumberBadge: {
-      position: 'absolute',
-      top: '5px',
-      right: '30px',
-      background: 'rgba(0, 0, 0, 0.4)',
-      color: 'rgba(255, 255, 255, 0.6)',
-      border: '1px solid rgba(255, 255, 255, 0.2)',
-      borderRadius: '4px',
-      padding: '2px 6px',
+  paneTitleLabel: {
+      flex: 1,
+      color: 'rgba(255,255,255,0.55)',
       fontSize: '11px',
-      fontWeight: 'bold',
       fontFamily: 'monospace',
-      userSelect: 'none',
-      pointerEvents: 'none',
-      zIndex: 15,
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      cursor: 'default',
+  },
+  renameInput: {
+      flex: 1,
+      background: 'transparent',
+      border: 'none',
+      borderBottom: '1px solid #50fa7b',
+      color: '#fff',
+      fontSize: '11px',
+      fontFamily: 'monospace',
+      outline: 'none',
+      padding: '0 2px',
+      minWidth: 0,
   },
   closePaneBtn: {
-      position: 'absolute',
-      top: '5px',
-      right: '5px',
-      background: 'rgba(0,0,0,0.5)',
-      color: 'white',
+      flexShrink: 0,
+      background: 'none',
+      color: 'rgba(255,255,255,0.4)',
       border: 'none',
       borderRadius: '50%',
-      width: '20px',
-      height: '20px',
+      width: '18px',
+      height: '18px',
       cursor: 'pointer',
-      fontSize: '14px',
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      zIndex: 20,
+      marginLeft: '4px',
   },
   aiBarContainer: {
     position: 'absolute',

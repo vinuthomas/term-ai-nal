@@ -40,4 +40,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   loadSession: () => ipcRenderer.invoke('load-session'),
   clearSession: () => ipcRenderer.invoke('clear-session'),
   getAllTerminalCwds: () => ipcRenderer.invoke('get-all-terminal-cwds'),
+
+  // MCP metadata sync
+  setMcpActivePane: (id: string) => ipcRenderer.send('mcp-set-active-pane', id),
+  setMcpPaneLabels: (labels: Record<string, string>) => ipcRenderer.send('mcp-set-pane-labels', labels),
 });

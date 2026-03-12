@@ -2,6 +2,7 @@ import { app, BrowserWindow, ipcMain, shell as electronShell, safeStorage } from
 import * as path from 'path';
 import * as os from 'os';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as pty from 'node-pty';
 import { execFileSync } from 'child_process';
 import { XMLParser } from 'fast-xml-parser';
@@ -330,6 +331,39 @@ const ptyProcesses = new Map<string, pty.IPty>();
 const closingTerminals = new Set<string>(); // Track terminals being intentionally closed
 const shell = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
 
+// --- Terminal Output Buffers ---
+const OUTPUT_BUFFER_MAX_CHARS = 500_000; // ~500 KB per terminal
+// Strip ANSI escape sequences for clean text storage
+const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-Za-z]|\x1b[DEMOST=>]|\x07|\x08|\x0d/g;
+const terminalOutputBuffers = new Map<string, string>();
+
+function appendToBuffer(id: string, rawData: string) {
+  const clean = rawData.replace(ANSI_RE, '');
+  const current = terminalOutputBuffers.get(id) || '';
+  const combined = current + clean;
+  // Trim from the start if over the cap
+  terminalOutputBuffers.set(
+    id,
+    combined.length > OUTPUT_BUFFER_MAX_CHARS
+      ? combined.slice(combined.length - OUTPUT_BUFFER_MAX_CHARS)
+      : combined
+  );
+}
+
+function getBufferLines(id: string, maxLines?: number): string {
+  const buf = terminalOutputBuffers.get(id) || '';
+  if (!maxLines) return buf;
+  const lines = buf.split('\n');
+  return lines.slice(-maxLines).join('\n');
+}
+
+// --- MCP Server State (metadata pushed from renderer) ---
+let activePaneId: string = '';
+let paneLabels: Record<string, string> = {};
+
+// MCP Server Port
+const MCP_PORT = 57320;
+
 function getCwd(pid: number): string {
   try {
     if (os.platform() === 'darwin') {
@@ -364,6 +398,7 @@ function createPty(id: string, cwd?: string) {
   });
 
   ptyProcess.onData((data) => {
+    appendToBuffer(id, data);
     mainWindow?.webContents.send('terminal-data', { id, data });
   });
 
@@ -419,6 +454,7 @@ function setupIpcHandlers() {
       ptyProcess.kill();
       ptyProcesses.delete(id);
     }
+    terminalOutputBuffers.delete(id);
   });
 
   // Settings & AI
@@ -468,6 +504,14 @@ function setupIpcHandlers() {
   ipcMain.handle('load-session', () => loadSession());
   ipcMain.handle('clear-session', () => { clearSession(); return true; });
 
+  // MCP metadata from renderer
+  ipcMain.on('mcp-set-active-pane', (event, id: string) => {
+    activePaneId = id;
+  });
+  ipcMain.on('mcp-set-pane-labels', (event, labels: Record<string, string>) => {
+    paneLabels = labels;
+  });
+
   // Get CWDs for all active terminals at once (used during session save)
   ipcMain.handle('get-all-terminal-cwds', () => {
     const cwds: Record<string, string> = {};
@@ -476,6 +520,242 @@ function setupIpcHandlers() {
     }
     return cwds;
   });
+}
+
+// --- MCP Server ---
+// Implements the MCP Streamable HTTP transport (single endpoint, JSON-RPC 2.0)
+// Docs: https://spec.modelcontextprotocol.io/specification/basic/transports/
+
+const MCP_TOOLS = [
+  {
+    name: 'list_terminals',
+    description: 'List all open terminal panels with their ID, label, and current working directory.',
+    inputSchema: {
+      type: 'object',
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: 'get_terminal_output',
+    description: 'Get the buffered text output of a specific terminal panel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminal_id: {
+          type: 'string',
+          description: 'The terminal panel ID (from list_terminals)',
+        },
+        lines: {
+          type: 'number',
+          description: 'Maximum number of tail lines to return (default: all buffered output)',
+        },
+      },
+      required: ['terminal_id'],
+    },
+  },
+  {
+    name: 'get_active_terminal_output',
+    description: 'Get the buffered text output of the currently active (focused) terminal panel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        lines: {
+          type: 'number',
+          description: 'Maximum number of tail lines to return (default: all buffered output)',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'send_input_to_terminal',
+    description: 'Send a text string (e.g. a command followed by \\n) to a specific terminal panel.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminal_id: {
+          type: 'string',
+          description: 'The terminal panel ID (from list_terminals)',
+        },
+        text: {
+          type: 'string',
+          description: 'Text to send to the terminal (append \\n to execute as a command)',
+        },
+      },
+      required: ['terminal_id', 'text'],
+    },
+  },
+];
+
+function buildTerminalList() {
+  return Array.from(ptyProcesses.keys()).map(id => {
+    const ptyProcess = ptyProcesses.get(id)!;
+    let cwd = '';
+    try { cwd = getCwd(ptyProcess.pid); } catch {}
+    return {
+      id,
+      label: paneLabels[id] || id,
+      cwd,
+      is_active: id === activePaneId,
+    };
+  });
+}
+
+function handleMcpToolCall(name: string, args: any): string {
+  switch (name) {
+    case 'list_terminals': {
+      const terminals = buildTerminalList();
+      return JSON.stringify(terminals, null, 2);
+    }
+    case 'get_terminal_output': {
+      const { terminal_id, lines } = args;
+      if (!terminalOutputBuffers.has(terminal_id) && !ptyProcesses.has(terminal_id)) {
+        return `Error: Terminal '${terminal_id}' not found. Use list_terminals to see available terminals.`;
+      }
+      return getBufferLines(terminal_id, lines ? parseInt(lines, 10) : undefined) || '(no output buffered yet)';
+    }
+    case 'get_active_terminal_output': {
+      const { lines } = args || {};
+      if (!activePaneId) return 'Error: No active terminal.';
+      return getBufferLines(activePaneId, lines ? parseInt(lines, 10) : undefined) || '(no output buffered yet)';
+    }
+    case 'send_input_to_terminal': {
+      const { terminal_id, text } = args || {};
+      if (!terminal_id || typeof terminal_id !== 'string') {
+        return `Error: Missing required argument 'terminal_id'.`;
+      }
+      if (text === undefined || text === null) {
+        return `Error: Missing required argument 'text'.`;
+      }
+      if (typeof text !== 'string') {
+        return `Error: Argument 'text' must be a string, got ${typeof text}.`;
+      }
+      const ptyProcess = ptyProcesses.get(terminal_id);
+      if (!ptyProcess) {
+        return `Error: Terminal '${terminal_id}' not found. Use list_terminals to see available terminals.`;
+      }
+      ptyProcess.write(text);
+      return `Sent ${text.length} characters to terminal '${terminal_id}'.`;
+    }
+    default:
+      return `Error: Unknown tool '${name}'.`;
+  }
+}
+
+function startMcpServer() {
+  const server = http.createServer((req, res) => {
+    // CORS for local access
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    // GET /sse or GET / — return server info
+    if (req.method === 'GET' && (req.url === '/' || req.url === '/mcp')) {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        name: 'term-ai-nal',
+        version: '1.0.0',
+        description: 'MCP server for term-ai-nal terminal emulator. Query terminal panel output.',
+        tools: MCP_TOOLS.map(t => t.name),
+        endpoint: `http://localhost:${MCP_PORT}/mcp`,
+      }));
+      return;
+    }
+
+    // POST /mcp — JSON-RPC 2.0 endpoint
+    if (req.method === 'POST' && req.url === '/mcp') {
+      let body = '';
+      req.on('data', chunk => { body += chunk; });
+      req.on('end', () => {
+        let rpcRequest: any;
+        try {
+          rpcRequest = JSON.parse(body);
+        } catch {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'Parse error' } }));
+          return;
+        }
+
+        const { id, method, params } = rpcRequest;
+
+        const respond = (result: any) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id, result }));
+        };
+
+        const respondError = (code: number, message: string) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }));
+        };
+
+        switch (method) {
+          case 'initialize':
+            respond({
+              protocolVersion: '2024-11-05',
+              capabilities: { tools: {} },
+              serverInfo: { name: 'term-ai-nal', version: '1.0.0' },
+            });
+            break;
+
+          case 'notifications/initialized':
+            res.writeHead(204);
+            res.end();
+            break;
+
+          case 'tools/list':
+            respond({ tools: MCP_TOOLS });
+            break;
+
+          case 'tools/call': {
+            const toolName: string = params?.name;
+            const toolArgs: any = params?.arguments || {};
+            if (!toolName) {
+              respondError(-32602, 'Missing tool name');
+              return;
+            }
+            const known = MCP_TOOLS.find(t => t.name === toolName);
+            if (!known) {
+              respondError(-32602, `Unknown tool: ${toolName}`);
+              return;
+            }
+            const output = handleMcpToolCall(toolName, toolArgs);
+            respond({
+              content: [{ type: 'text', text: output }],
+            });
+            break;
+          }
+
+          default:
+            respondError(-32601, `Method not found: ${method}`);
+        }
+      });
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not found' }));
+  });
+
+  server.listen(MCP_PORT, '127.0.0.1', () => {
+    console.log(`[MCP] Server running at http://127.0.0.1:${MCP_PORT}/mcp`);
+  });
+
+  server.on('error', (err: any) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(`[MCP] Port ${MCP_PORT} already in use. MCP server not started.`);
+    } else {
+      console.error('[MCP] Server error:', err);
+    }
+  });
+
+  return server;
 }
 
 function createWindow() {
@@ -508,6 +788,7 @@ function createWindow() {
 
 app.whenReady().then(() => {
   setupIpcHandlers();
+  startMcpServer();
   createWindow();
 });
 
