@@ -7,6 +7,25 @@ An AI-powered terminal for macOS built with Electron, React, and xterm.js.
 - **AI Command Palette:** Press `Cmd + Shift + P` to open the AI bar.
 - **Agentic Workflows:** Type natural language instructions to generate shell commands.
 - **Safety First:** All AI-generated commands require manual review and approval before execution.
+- **Split Panes:** Split horizontally or vertically with `Cmd+T` / `Cmd+Shift+T`.
+- **MCP Server:** Built-in Model Context Protocol server for AI agent integration with live SSE streaming.
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Cmd+Shift+P` | Open AI command palette |
+| `Cmd+T` | Split pane right |
+| `Cmd+Shift+T` | Split pane down |
+| `Cmd+Alt+T` | Split pane left |
+| `Cmd+Shift+Alt+T` | Split pane up |
+| `Cmd+W` | Close active pane |
+| `Cmd+1` – `Cmd+9` | Switch to pane by number |
+| `Cmd+K` | Clear terminal screen + scrollback |
+| `Cmd+L` | Clear terminal screen (preserve scrollback) |
+| `Cmd+C` | Copy selection, or send SIGINT if nothing selected |
+| `Cmd+V` | Paste clipboard into terminal |
+| `Cmd+A` | Select all terminal text |
 
 ## Getting Started
 
@@ -42,7 +61,7 @@ npm run dev:electron
 
 ## MCP Server
 
-Term-AI-nal exposes a built-in **Model Context Protocol (MCP)** server that lets external AI agents and tools interact with your terminal panes — read their output, list open panes, and send input.
+Term-AI-nal exposes a built-in **Model Context Protocol (MCP)** server that lets external AI agents and tools interact with your terminal panes — read their output, list open panes, send input, and stream live output in real time.
 
 The server starts automatically when the app launches and listens at:
 
@@ -58,6 +77,88 @@ http://127.0.0.1:57320/mcp
 | `get_terminal_output` | Get the buffered text output of a specific pane by ID |
 | `get_active_terminal_output` | Get the buffered text output of the currently focused pane |
 | `send_input_to_terminal` | Send text or a command to a specific pane |
+| `watch_terminal` | Get the SSE stream URL to watch live output from a specific pane |
+| `watch_active_terminal` | Get the SSE stream URL to watch whichever pane is currently focused |
+
+### Live Streaming (SSE)
+
+In addition to the JSON-RPC polling tools, Term-AI-nal exposes a parallel **Server-Sent Events (SSE)** endpoint for streaming live terminal output to AI agents without polling.
+
+#### Endpoints
+
+```
+GET /mcp/stream?terminal_id=<id>   — stream a specific terminal
+GET /mcp/stream?active=true        — stream whichever pane is currently focused
+```
+
+#### Query Parameters
+
+| Parameter | Default | Description |
+|---|---|---|
+| `terminal_id` | — | ID of the terminal to watch (from `list_terminals`) |
+| `active` | `false` | Set to `true` to watch the currently focused pane |
+| `history` | `true` | Set to `false` to skip sending buffered history on connect |
+
+#### SSE Events
+
+| Event | Payload | When |
+|---|---|---|
+| `connected` | `{ terminal_id }` or `{ watching: "active", active_terminal_id }` | Immediately on connect |
+| `output` | `"<new text chunk>"` | Every time the terminal produces output |
+| `pane_changed` | `{ previous_terminal_id, terminal_id }` | Active mode only — when user switches panes |
+| `heartbeat` | `"ping"` | Every 15 s to keep proxies and agents alive |
+| `closed` | `"Terminal <id> was closed."` | When the terminal is killed |
+
+#### Example
+
+```bash
+# Watch a specific terminal in real time
+curl -N "http://127.0.0.1:57320/mcp/stream?terminal_id=term-1"
+
+# Watch the active terminal (switches automatically when user changes panes)
+curl -N "http://127.0.0.1:57320/mcp/stream?active=true"
+
+# Connect without replaying history
+curl -N "http://127.0.0.1:57320/mcp/stream?active=true&history=false"
+```
+
+Sample output:
+```
+event: connected
+data: {"watching":"active","active_terminal_id":"term-1"}
+
+event: output
+data: "$ npm test\n"
+
+event: output
+data: "✓ all tests passed\n"
+
+event: pane_changed
+data: {"previous_terminal_id":"term-1","terminal_id":"term-2"}
+
+event: heartbeat
+data: "ping"
+```
+
+### Per-Pane Visibility
+
+Each pane has an **MCP badge** in its title bar. Click it to toggle whether that pane is visible to MCP clients:
+
+- **Green badge** — pane is visible to `list_terminals`, output tools, and SSE streams
+- **Grey badge** — pane is hidden from all MCP tools (useful for sensitive terminals)
+
+The badge is greyed out and non-interactive when the MCP server is disabled.
+
+### Buffer Settings
+
+Configure the output buffer per pane in **Settings → MCP**:
+
+| Setting | Default | Description |
+|---|---|---|
+| Buffer size | 500 KB | Maximum in-memory output retained per pane |
+| File overflow | On | Oldest content spills to a temp file instead of being dropped |
+
+> **Note:** File overflow stores data in `$TMPDIR/term-ai-nal-buffer-<id>.txt`. These files are readable by other processes on the same machine. Disable file overflow for sensitive terminals.
 
 ### Connecting an MCP Client
 
@@ -124,14 +225,19 @@ curl -s -X POST http://127.0.0.1:57320/mcp \
 curl -s -X POST http://127.0.0.1:57320/mcp \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"send_input_to_terminal","arguments":{"terminal_id":"term-1","text":"echo hello\n"}}}'
+
+# Stream live output from the active terminal
+curl -N "http://127.0.0.1:57320/mcp/stream?active=true"
 ```
 
 ### Protocol Details
 
-- **Transport:** Streamable HTTP (JSON-RPC 2.0)
-- **Endpoint:** `POST http://127.0.0.1:57320/mcp`
+- **Transport:** Streamable HTTP (JSON-RPC 2.0) + parallel SSE endpoint
+- **JSON-RPC endpoint:** `POST http://127.0.0.1:57320/mcp`
+- **SSE endpoint:** `GET http://127.0.0.1:57320/mcp/stream`
 - **Protocol version:** `2024-11-05`
-- **Output buffer:** Up to 500 KB per pane, ANSI escape codes stripped
+- **Output buffer:** Up to 500 KB per pane (configurable), ANSI escape codes stripped
+- **Bound to:** `127.0.0.1` only — not accessible over the network
 
 ---
 
