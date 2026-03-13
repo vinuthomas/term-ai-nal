@@ -88,7 +88,10 @@
     }
   },
   "keywords": [],
-  "author": "",
+  "author": {
+    "name": "Vinu Thomas",
+    "email": "hey@vinuthomas.com"
+  },
   "license": "MIT",
   "type": "commonjs",
   "devDependencies": {
