@@ -349,6 +349,77 @@ const terminalOutputBuffers = new Map<string, string>();
 // Spill files: when in-memory buffer is full, oldest content overflows to a per-terminal temp file
 const terminalSpillFiles = new Map<string, string>();
 
+// --- SSE Streaming ---
+// Map from terminal_id → Set of active SSE response objects watching that terminal.
+// 'active' means watching ALL visible terminals (used by watch_active_terminal).
+type SseSubscriber = { res: import('http').ServerResponse; id: string };
+const sseSubscribers = new Map<string, Set<SseSubscriber>>(); // terminal_id → subscribers
+const sseActiveSubscribers = new Set<SseSubscriber>();        // watching the active terminal
+
+let _sseNextId = 0;
+function makeSseId() { return `sse-${++_sseNextId}`; }
+
+/** Send a SSE event to a single subscriber. Returns false if the write failed (connection closed). */
+function sseSend(sub: SseSubscriber, event: string, data: string): boolean {
+  try {
+    sub.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Broadcast new terminal output to all SSE subscribers watching that terminal_id,
+ *  and to active-terminal subscribers if it matches the current active pane. */
+function broadcastToSseSubscribers(terminalId: string, text: string) {
+  // Broadcast to explicit subscribers for this terminal
+  const subs = sseSubscribers.get(terminalId);
+  if (subs) {
+    for (const sub of [...subs]) {
+      if (!sseSend(sub, 'output', text)) subs.delete(sub);
+    }
+    if (subs.size === 0) sseSubscribers.delete(terminalId);
+  }
+  // Broadcast to active-terminal subscribers if this is the active pane
+  if (terminalId === activePaneId) {
+    for (const sub of [...sseActiveSubscribers]) {
+      if (!sseSend(sub, 'output', text)) sseActiveSubscribers.delete(sub);
+    }
+  }
+}
+
+/** Remove a subscriber from all registries and end the SSE response. */
+function removeSseSubscriber(sub: SseSubscriber) {
+  sseActiveSubscribers.delete(sub);
+  for (const [tid, subs] of sseSubscribers) {
+    subs.delete(sub);
+    if (subs.size === 0) sseSubscribers.delete(tid);
+  }
+  try { sub.res.end(); } catch {}
+}
+
+/** Remove all SSE subscribers for a terminal (e.g. when the terminal is closed). */
+function removeAllSseSubscribersForTerminal(terminalId: string) {
+  const subs = sseSubscribers.get(terminalId);
+  if (subs) {
+    for (const sub of subs) {
+      try { sseSend(sub, 'closed', `Terminal ${terminalId} was closed.`); } catch {}
+      try { sub.res.end(); } catch {}
+    }
+    sseSubscribers.delete(terminalId);
+  }
+}
+
+/** Close all active SSE connections (called when MCP server stops). */
+function closeAllSseSubscribers() {
+  for (const [, subs] of sseSubscribers) {
+    for (const sub of subs) { try { sub.res.end(); } catch {} }
+  }
+  sseSubscribers.clear();
+  for (const sub of sseActiveSubscribers) { try { sub.res.end(); } catch {} }
+  sseActiveSubscribers.clear();
+}
+
 function getBufferMaxChars(): number {
   const settings = loadSettings();
   const kb = settings.mcpBufferSizeKB ?? 500;
@@ -389,6 +460,9 @@ function appendToBuffer(id: string, rawData: string) {
   } else {
     terminalOutputBuffers.set(id, combined);
   }
+
+  // Broadcast new clean text to any SSE subscribers watching this terminal
+  broadcastToSseSubscribers(id, clean);
 }
 
 function getBufferLines(id: string, maxLines?: number): string {
@@ -526,6 +600,7 @@ function setupIpcHandlers() {
     }
     terminalOutputBuffers.delete(id);
     cleanupSpillFile(id);
+    removeAllSseSubscribersForTerminal(id);
   });
 
   // Settings & AI
@@ -593,7 +668,16 @@ function setupIpcHandlers() {
 
   // MCP metadata from renderer
   ipcMain.on('mcp-set-active-pane', (event, id: string) => {
+    const prev = activePaneId;
     activePaneId = id;
+    // Notify active-terminal SSE subscribers about the pane change
+    if (prev !== id && sseActiveSubscribers.size > 0) {
+      const payload = JSON.stringify({ previous_terminal_id: prev, terminal_id: id });
+      for (const sub of [...sseActiveSubscribers]) {
+        try { sub.res.write(`event: pane_changed\ndata: ${payload}\n\n`); }
+        catch { sseActiveSubscribers.delete(sub); }
+      }
+    }
   });
   ipcMain.on('mcp-set-pane-labels', (event, labels: Record<string, string>) => {
     paneLabels = labels;
@@ -676,6 +760,38 @@ const MCP_TOOLS = [
       required: ['terminal_id', 'text'],
     },
   },
+  {
+    name: 'watch_terminal',
+    description: 'Stream live output from a specific terminal panel over SSE. Connect to GET /mcp/stream?terminal_id=<id> to receive real-time output events. Each SSE event has type "output" with the new text chunk, "connected" on start, "heartbeat" every 15 s, and "closed" when the terminal closes.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        terminal_id: {
+          type: 'string',
+          description: 'The terminal panel ID to watch (from list_terminals). Omit to watch the active terminal.',
+        },
+        include_history: {
+          type: 'boolean',
+          description: 'If true, send buffered history immediately after connecting (default: true).',
+        },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'watch_active_terminal',
+    description: 'Stream live output from whichever terminal is currently focused, switching automatically when the user changes panes. Connect to GET /mcp/stream?active=true. Events: "output", "connected", "pane_changed", "heartbeat", "closed".',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        include_history: {
+          type: 'boolean',
+          description: 'If true, send buffered history of the current active terminal immediately after connecting (default: true).',
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 function buildTerminalList() {
@@ -735,6 +851,20 @@ function handleMcpToolCall(name: string, args: any): string {
       }
       ptyProcess.write(text);
       return `Sent ${text.length} characters to terminal '${terminal_id}'.`;
+    }
+    case 'watch_terminal': {
+      const { terminal_id, include_history } = args || {};
+      const tid = terminal_id || activePaneId;
+      if (!tid) return 'Error: No terminal_id provided and no active terminal.';
+      if (mcpHiddenPanes.has(tid)) return `Error: Terminal '${tid}' is not visible to MCP.`;
+      if (!ptyProcesses.has(tid)) return `Error: Terminal '${tid}' not found. Use list_terminals to see available terminals.`;
+      const url = `http://127.0.0.1:${mcpCurrentPort}/mcp/stream?terminal_id=${encodeURIComponent(tid)}${include_history === false ? '&history=false' : ''}`;
+      return `Connect to this SSE endpoint to stream live output from terminal '${tid}':\n${url}\n\nEvents:\n  connected — sent immediately with terminal metadata\n  output    — new text chunk from the terminal\n  heartbeat — sent every 15 s to keep the connection alive\n  closed    — terminal was closed`;
+    }
+    case 'watch_active_terminal': {
+      const { include_history } = args || {};
+      const url = `http://127.0.0.1:${mcpCurrentPort}/mcp/stream?active=true${include_history === false ? '&history=false' : ''}`;
+      return `Connect to this SSE endpoint to stream live output from the active terminal (switches automatically when the user changes panes):\n${url}\n\nEvents:\n  connected    — sent immediately\n  output       — new text chunk\n  pane_changed — active terminal changed (includes new terminal_id)\n  heartbeat    — sent every 15 s\n  closed       — terminal was closed`;
     }
     default:
       return `Error: Unknown tool '${name}'.`;
@@ -817,6 +947,8 @@ function startMcpServer(port: number = 57320) {
               if (t.name === 'get_terminal_output') return features.getTerminalOutput !== false;
               if (t.name === 'get_active_terminal_output') return features.getActiveTerminalOutput !== false;
               if (t.name === 'send_input_to_terminal') return features.sendInputToTerminal !== false;
+              if (t.name === 'watch_terminal') return features.getTerminalOutput !== false;
+              if (t.name === 'watch_active_terminal') return features.getActiveTerminalOutput !== false;
               return true;
             });
             respond({ tools: enabledTools });
@@ -837,6 +969,8 @@ function startMcpServer(port: number = 57320) {
               get_terminal_output: 'getTerminalOutput',
               get_active_terminal_output: 'getActiveTerminalOutput',
               send_input_to_terminal: 'sendInputToTerminal',
+              watch_terminal: 'getTerminalOutput',         // gate behind same feature as get_terminal_output
+              watch_active_terminal: 'getActiveTerminalOutput',
             };
             const featureKey = featureMap[toolName];
             if (featureKey && features[featureKey] === false) {
@@ -859,6 +993,73 @@ function startMcpServer(port: number = 57320) {
           default:
             respondError(-32601, `Method not found: ${method}`);
         }
+      });
+      return;
+    }
+
+    // GET /mcp/stream — SSE endpoint for live terminal output streaming
+    if (req.method === 'GET' && req.url?.startsWith('/mcp/stream')) {
+      const urlObj = new URL(req.url, `http://127.0.0.1:${port}`);
+      const terminalId = urlObj.searchParams.get('terminal_id') || '';
+      const watchActive = urlObj.searchParams.get('active') === 'true';
+      const includeHistory = urlObj.searchParams.get('history') !== 'false';
+
+      // Validate
+      if (!watchActive && !terminalId) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Provide terminal_id or active=true' }));
+        return;
+      }
+      if (terminalId && mcpHiddenPanes.has(terminalId)) {
+        res.writeHead(403, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Terminal '${terminalId}' is not visible to MCP.` }));
+        return;
+      }
+      if (terminalId && !ptyProcesses.has(terminalId)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: `Terminal '${terminalId}' not found.` }));
+        return;
+      }
+
+      // Set SSE headers — keep connection open
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      });
+      res.flushHeaders();
+
+      const sub: SseSubscriber = { res, id: makeSseId() };
+
+      // Register subscriber
+      if (watchActive) {
+        sseActiveSubscribers.add(sub);
+        res.write(`event: connected\ndata: ${JSON.stringify({ watching: 'active', active_terminal_id: activePaneId })}\n\n`);
+        if (includeHistory && activePaneId && !mcpHiddenPanes.has(activePaneId)) {
+          const history = getBufferLines(activePaneId);
+          if (history) res.write(`event: output\ndata: ${JSON.stringify(history)}\n\n`);
+        }
+      } else {
+        if (!sseSubscribers.has(terminalId)) sseSubscribers.set(terminalId, new Set());
+        sseSubscribers.get(terminalId)!.add(sub);
+        res.write(`event: connected\ndata: ${JSON.stringify({ terminal_id: terminalId })}\n\n`);
+        if (includeHistory) {
+          const history = getBufferLines(terminalId);
+          if (history) res.write(`event: output\ndata: ${JSON.stringify(history)}\n\n`);
+        }
+      }
+
+      // Heartbeat every 15 s to keep proxies/agents from timing out
+      const heartbeat = setInterval(() => {
+        try { res.write(`event: heartbeat\ndata: "ping"\n\n`); }
+        catch { clearInterval(heartbeat); removeSseSubscriber(sub); }
+      }, 15000);
+
+      // Clean up when client disconnects
+      req.on('close', () => {
+        clearInterval(heartbeat);
+        removeSseSubscriber(sub);
       });
       return;
     }
@@ -886,6 +1087,7 @@ function startMcpServer(port: number = 57320) {
 function stopMcpServer(): Promise<void> {
   return new Promise((resolve) => {
     if (!mcpServer) { resolve(); return; }
+    closeAllSseSubscribers();
     mcpServer.close(() => {
       mcpServer = null;
       resolve();
