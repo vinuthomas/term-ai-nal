@@ -21,6 +21,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   const [mcpEnabled, setMcpEnabled] = useState(true);
   const [mcpPort, setMcpPort] = useState(57320);
   const [mcpBufferSizeKB, setMcpBufferSizeKB] = useState(500);
+  const [mcpFileBufferEnabled, setMcpFileBufferEnabled] = useState(true);
   const [systemTotalMB, setSystemTotalMB] = useState(0);
   const [mcpFeatures, setMcpFeatures] = useState({
     listTerminals: true,
@@ -46,6 +47,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       setMcpEnabled(s.mcpEnabled !== false);
       setMcpPort(s.mcpPort || 57320);
       setMcpBufferSizeKB(s.mcpBufferSizeKB ?? 500);
+      setMcpFileBufferEnabled(s.mcpFileBufferEnabled !== false);
       setMcpFeatures({
         listTerminals: s.mcpFeatures?.listTerminals !== false,
         getTerminalOutput: s.mcpFeatures?.getTerminalOutput !== false,
@@ -87,7 +89,11 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    // Load the full existing settings first so fields we don't manage in this
+    // component (e.g. customTheme, customThemeName, mcpHiddenPanes) are preserved.
+    const existing = await window.electronAPI.getSettings();
     await window.electronAPI.saveSettings({
+      ...existing,
       provider,
       apiKey,
       model,
@@ -99,6 +105,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       mcpEnabled,
       mcpPort,
       mcpBufferSizeKB,
+      mcpFileBufferEnabled,
       mcpFeatures,
     });
     // Trigger terminal refresh to apply new settings
@@ -513,6 +520,50 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                   </>
                 );
               })()}
+            </div>
+
+            {/* File-Based Overflow Buffer Toggle */}
+            <div style={styles.group}>
+              <label style={styles.label}>File-Based Overflow Buffer</label>
+              <div
+                onClick={() => setMcpFileBufferEnabled(!mcpFileBufferEnabled)}
+                style={{ display: 'flex', alignItems: 'center', gap: '12px', cursor: 'pointer', padding: '8px 0' }}
+              >
+                <div style={{
+                  width: '40px', height: '22px', borderRadius: '11px',
+                  backgroundColor: mcpFileBufferEnabled ? '#007acc' : '#3e3e42',
+                  position: 'relative' as const, transition: 'background-color 0.2s', flexShrink: 0,
+                }}>
+                  <div style={{
+                    width: '18px', height: '18px', borderRadius: '50%', backgroundColor: '#fff',
+                    position: 'absolute' as const, top: '2px',
+                    left: mcpFileBufferEnabled ? '20px' : '2px', transition: 'left 0.2s',
+                  }} />
+                </div>
+                <span style={{ color: '#ddd', fontSize: '14px' }}>
+                  {mcpFileBufferEnabled ? 'Enabled' : 'Disabled'}
+                </span>
+              </div>
+              <small style={{ color: '#666', marginTop: '2px', display: 'block' }}>
+                When enabled, output that exceeds the in-memory buffer is spilled to a temporary file so no history is lost. When disabled, the oldest output is dropped instead.
+              </small>
+              {mcpFileBufferEnabled && (
+                <div style={{
+                  marginTop: '8px',
+                  padding: '10px 12px',
+                  borderRadius: '4px',
+                  backgroundColor: '#3a2a00',
+                  border: '1px solid #7a5500',
+                  display: 'flex',
+                  gap: '8px',
+                  alignItems: 'flex-start',
+                }}>
+                  <span style={{ fontSize: '14px', flexShrink: 0 }}>&#9888;</span>
+                  <small style={{ color: '#e8c46a', lineHeight: '1.5' }}>
+                    Spill files are written to the system temp directory and may be readable by other processes on this machine. Avoid enabling this if your terminal sessions contain sensitive data such as passwords, tokens, or private keys.
+                  </small>
+                </div>
+              )}
             </div>
 
             {/* Feature Toggles */}

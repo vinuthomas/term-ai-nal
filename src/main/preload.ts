@@ -44,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // MCP metadata sync
   setMcpActivePane: (id: string) => ipcRenderer.send('mcp-set-active-pane', id),
   setMcpPaneLabels: (labels: Record<string, string>) => ipcRenderer.send('mcp-set-pane-labels', labels),
+  setMcpHiddenPanes: (hiddenIds: string[]) => ipcRenderer.send('mcp-set-hidden-panes', hiddenIds),
   getMcpUrl: () => ipcRenderer.invoke('get-mcp-url'),
   getSystemMemory: () => ipcRenderer.invoke('get-system-memory'),
 });

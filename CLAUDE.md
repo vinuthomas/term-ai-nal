@@ -60,3 +60,8 @@ build/                   # Electron-builder resources (icons, entitlements)
 ## Build Output
 
 Production builds go to `release/`. The app ID is `com.termainal.app`.
+
+## Release Process
+
+**Never automatically push commits or create GitHub releases without explicit human approval.**
+Always stop after building the DMG and ask the user to test the application first. Only push to git and create a GitHub release after the user has tested and confirmed the build works.

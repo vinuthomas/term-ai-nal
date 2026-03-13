@@ -28,6 +28,7 @@ declare global {
       getOllamaModels: (baseUrl: string) => Promise<string[]>;
       setMcpActivePane: (id: string) => void;
       setMcpPaneLabels: (labels: Record<string, string>) => void;
+      setMcpHiddenPanes: (hiddenIds: string[]) => void;
       getMcpUrl: () => Promise<string>;
       getSystemMemory: () => Promise<{ totalMB: number; freeMB: number }>;
     };
@@ -135,6 +136,8 @@ const App: React.FC = () => {
   const [terminals, setTerminals] = useState<string[]>([]); // Keep track of active terminal IDs for cleanup
   const [nextPaneNumber, setNextPaneNumber] = useState<number>(2); // Counter for pane numbers
   const [paneLabels, setPaneLabels] = useState<Record<string, string>>({}); // Custom labels for panes
+  const [mcpHiddenPanes, setMcpHiddenPanes] = useState<Set<string>>(new Set()); // Panes hidden from MCP
+  const [mcpServerEnabled, setMcpServerEnabled] = useState<boolean>(true); // Mirrors settings.mcpEnabled
   const [renamingPaneId, setRenamingPaneId] = useState<string | null>(null); // ID of pane being renamed
   const [renameValue, setRenameValue] = useState<string>(''); // Current rename input value
 
@@ -182,6 +185,21 @@ const App: React.FC = () => {
   useEffect(() => {
     window.electronAPI.setMcpPaneLabels(paneLabels);
   }, [paneLabels]);
+
+  useEffect(() => {
+    window.electronAPI.setMcpHiddenPanes(Array.from(mcpHiddenPanes));
+  }, [mcpHiddenPanes]);
+
+  // Load mcpEnabled from settings; refresh whenever settings are saved
+  useEffect(() => {
+    const sync = async () => {
+      const s = await window.electronAPI.getSettings();
+      setMcpServerEnabled(s.mcpEnabled !== false);
+    };
+    sync();
+    window.addEventListener('settings-updated', sync);
+    return () => window.removeEventListener('settings-updated', sync);
+  }, []);
 
   // --- Session Restore on Mount ---
   const [sessionRestored, setSessionRestored] = useState(false);
@@ -711,6 +729,50 @@ const App: React.FC = () => {
                 {label}
               </span>
             )}
+            {/* MCP visibility toggle */}
+            {(() => {
+              const isMcpVisible = mcpServerEnabled && !mcpHiddenPanes.has(paneId);
+              const isDisabledByServer = !mcpServerEnabled;
+              return (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isDisabledByServer) return;
+                    setMcpHiddenPanes(prev => {
+                      const next = new Set(prev);
+                      if (next.has(paneId)) next.delete(paneId);
+                      else next.add(paneId);
+                      return next;
+                    });
+                  }}
+                  title={
+                    isDisabledByServer
+                      ? 'MCP server is disabled in Settings'
+                      : isMcpVisible
+                        ? 'Visible to MCP — click to hide'
+                        : 'Hidden from MCP — click to show'
+                  }
+                  style={{
+                    background: 'none',
+                    border: `1px solid ${isMcpVisible ? '#388a34' : '#555'}`,
+                    borderRadius: '3px',
+                    color: isMcpVisible ? '#4ec9b0' : '#555',
+                    fontSize: '10px',
+                    fontWeight: 'bold',
+                    fontFamily: 'monospace',
+                    padding: '1px 5px',
+                    cursor: isDisabledByServer ? 'default' : 'pointer',
+                    lineHeight: '14px',
+                    backgroundColor: isMcpVisible ? 'rgba(56,138,52,0.15)' : 'transparent',
+                    transition: 'all 0.15s',
+                    flexShrink: 0,
+                    opacity: isDisabledByServer ? 0.35 : 1,
+                  }}
+                >
+                  MCP
+                </button>
+              );
+            })()}
             {/* Close button */}
             {terminals.length > 1 && (
               <button

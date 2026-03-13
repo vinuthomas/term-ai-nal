@@ -26,6 +26,7 @@ const defaultSettings = {
   mcpEnabled: true, // Enable/disable MCP server
   mcpPort: 57320, // Port for MCP server
   mcpBufferSizeKB: 500, // Per-terminal in-memory buffer size in KB (overflow spills to temp file)
+  mcpFileBufferEnabled: true, // When true, overflow spills to a temp file; when false, oldest data is dropped
   mcpFeatures: {
     listTerminals: true,
     getTerminalOutput: true,
@@ -354,6 +355,11 @@ function getBufferMaxChars(): number {
   return Math.max(1024, kb * 1024); // minimum 1 KB, convert to chars (~1 char ≈ 1 byte for ASCII)
 }
 
+function isFileBufferEnabled(): boolean {
+  const settings = loadSettings();
+  return settings.mcpFileBufferEnabled !== false;
+}
+
 function appendToBuffer(id: string, rawData: string) {
   const clean = rawData.replace(ANSI_RE, '');
   if (!clean) return;
@@ -362,21 +368,23 @@ function appendToBuffer(id: string, rawData: string) {
   const combined = current + clean;
 
   if (combined.length > maxChars) {
-    // Spill the oldest portion to the temp file
     const spillChunk = combined.slice(0, combined.length - maxChars);
     const keepChunk = combined.slice(combined.length - maxChars);
 
-    // Write spill chunk to temp file (append)
-    let spillPath = terminalSpillFiles.get(id);
-    if (!spillPath) {
-      spillPath = path.join(os.tmpdir(), `term-ai-nal-buffer-${id}.txt`);
-      terminalSpillFiles.set(id, spillPath);
+    if (isFileBufferEnabled()) {
+      // Spill the oldest portion to the temp file
+      let spillPath = terminalSpillFiles.get(id);
+      if (!spillPath) {
+        spillPath = path.join(os.tmpdir(), `term-ai-nal-buffer-${id}.txt`);
+        terminalSpillFiles.set(id, spillPath);
+      }
+      try {
+        fs.appendFileSync(spillPath, spillChunk, 'utf-8');
+      } catch (e) {
+        console.error(`[Buffer] Failed to write spill file for terminal ${id}:`, e);
+      }
     }
-    try {
-      fs.appendFileSync(spillPath, spillChunk, 'utf-8');
-    } catch (e) {
-      console.error(`[Buffer] Failed to write spill file for terminal ${id}:`, e);
-    }
+    // Whether spilling or dropping, keep only the newest maxChars in memory
     terminalOutputBuffers.set(id, keepChunk);
   } else {
     terminalOutputBuffers.set(id, combined);
@@ -420,6 +428,7 @@ function cleanupSpillFile(id: string) {
 // --- MCP Server State (metadata pushed from renderer) ---
 let activePaneId: string = '';
 let paneLabels: Record<string, string> = {};
+let mcpHiddenPanes: Set<string> = new Set(); // Panes excluded from MCP visibility
 
 // MCP Server instance (kept so we can close/restart it)
 let mcpServer: http.Server | null = null;
@@ -589,6 +598,9 @@ function setupIpcHandlers() {
   ipcMain.on('mcp-set-pane-labels', (event, labels: Record<string, string>) => {
     paneLabels = labels;
   });
+  ipcMain.on('mcp-set-hidden-panes', (event, hiddenIds: string[]) => {
+    mcpHiddenPanes = new Set(hiddenIds);
+  });
 
   // Get CWDs for all active terminals at once (used during session save)
   ipcMain.handle('get-all-terminal-cwds', () => {
@@ -667,17 +679,19 @@ const MCP_TOOLS = [
 ];
 
 function buildTerminalList() {
-  return Array.from(ptyProcesses.keys()).map(id => {
-    const ptyProcess = ptyProcesses.get(id)!;
-    let cwd = '';
-    try { cwd = getCwd(ptyProcess.pid); } catch {}
-    return {
-      id,
-      label: paneLabels[id] || id,
-      cwd,
-      is_active: id === activePaneId,
-    };
-  });
+  return Array.from(ptyProcesses.keys())
+    .filter(id => !mcpHiddenPanes.has(id))
+    .map(id => {
+      const ptyProcess = ptyProcesses.get(id)!;
+      let cwd = '';
+      try { cwd = getCwd(ptyProcess.pid); } catch {}
+      return {
+        id,
+        label: paneLabels[id] || id,
+        cwd,
+        is_active: id === activePaneId,
+      };
+    });
 }
 
 function handleMcpToolCall(name: string, args: any): string {
@@ -688,6 +702,9 @@ function handleMcpToolCall(name: string, args: any): string {
     }
     case 'get_terminal_output': {
       const { terminal_id, lines } = args;
+      if (mcpHiddenPanes.has(terminal_id)) {
+        return `Error: Terminal '${terminal_id}' is not visible to MCP.`;
+      }
       if (!terminalOutputBuffers.has(terminal_id) && !ptyProcesses.has(terminal_id)) {
         return `Error: Terminal '${terminal_id}' not found. Use list_terminals to see available terminals.`;
       }
@@ -696,6 +713,9 @@ function handleMcpToolCall(name: string, args: any): string {
     case 'get_active_terminal_output': {
       const { lines } = args || {};
       if (!activePaneId) return 'Error: No active terminal.';
+      if (mcpHiddenPanes.has(activePaneId)) {
+        return 'Error: The active terminal is not visible to MCP.';
+      }
       return getBufferLines(activePaneId, lines ? parseInt(lines, 10) : undefined) || '(no output buffered yet)';
     }
     case 'send_input_to_terminal': {
