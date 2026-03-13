@@ -22,6 +22,15 @@ const defaultSettings = {
   customTheme: null, // For imported iTerm themes
   customThemeName: '', // Name of imported theme
   restoreSession: false, // Restore pane layout and working directories on startup
+  // MCP settings
+  mcpEnabled: true, // Enable/disable MCP server
+  mcpPort: 57320, // Port for MCP server
+  mcpFeatures: {
+    listTerminals: true,
+    getTerminalOutput: true,
+    getActiveTerminalOutput: true,
+    sendInputToTerminal: true,
+  },
 };
 
 function loadSettings() {
@@ -361,8 +370,9 @@ function getBufferLines(id: string, maxLines?: number): string {
 let activePaneId: string = '';
 let paneLabels: Record<string, string> = {};
 
-// MCP Server Port
-const MCP_PORT = 57320;
+// MCP Server instance (kept so we can close/restart it)
+let mcpServer: http.Server | null = null;
+let mcpCurrentPort: number = 57320;
 
 function getCwd(pid: number): string {
   try {
@@ -459,7 +469,17 @@ function setupIpcHandlers() {
 
   // Settings & AI
   ipcMain.handle('get-settings', () => loadSettings());
-  ipcMain.handle('save-settings', (event, settings) => saveSettings(settings));
+  ipcMain.handle('save-settings', async (event, settings) => {
+    const result = saveSettings(settings);
+    // Apply MCP settings changes immediately (enable/disable, port change)
+    await applyMcpSettings(settings);
+    return result;
+  });
+  ipcMain.handle('get-mcp-url', () => {
+    const settings = loadSettings();
+    const port = mcpServer ? mcpCurrentPort : (settings.mcpPort || 57320);
+    return `http://127.0.0.1:${port}/mcp`;
+  });
   ipcMain.handle('get-ollama-models', async (event, baseUrl) => {
     try {
       const url = `${baseUrl || 'http://localhost:11434'}/api/tags`;
@@ -643,7 +663,7 @@ function handleMcpToolCall(name: string, args: any): string {
   }
 }
 
-function startMcpServer() {
+function startMcpServer(port: number = 57320) {
   const server = http.createServer((req, res) => {
     // CORS for local access
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -656,7 +676,7 @@ function startMcpServer() {
       return;
     }
 
-    // GET /sse or GET / — return server info
+    // GET / or GET /mcp — return server info
     if (req.method === 'GET' && (req.url === '/' || req.url === '/mcp')) {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({
@@ -664,7 +684,7 @@ function startMcpServer() {
         version: '1.0.0',
         description: 'MCP server for term-ai-nal terminal emulator. Query terminal panel output.',
         tools: MCP_TOOLS.map(t => t.name),
-        endpoint: `http://localhost:${MCP_PORT}/mcp`,
+        endpoint: `http://localhost:${port}/mcp`,
       }));
       return;
     }
@@ -695,6 +715,10 @@ function startMcpServer() {
           res.end(JSON.stringify({ jsonrpc: '2.0', id, error: { code, message } }));
         };
 
+        // Load current settings to check which features are enabled
+        const currentSettings = loadSettings();
+        const features = currentSettings.mcpFeatures || {};
+
         switch (method) {
           case 'initialize':
             respond({
@@ -709,9 +733,17 @@ function startMcpServer() {
             res.end();
             break;
 
-          case 'tools/list':
-            respond({ tools: MCP_TOOLS });
+          case 'tools/list': {
+            const enabledTools = MCP_TOOLS.filter(t => {
+              if (t.name === 'list_terminals') return features.listTerminals !== false;
+              if (t.name === 'get_terminal_output') return features.getTerminalOutput !== false;
+              if (t.name === 'get_active_terminal_output') return features.getActiveTerminalOutput !== false;
+              if (t.name === 'send_input_to_terminal') return features.sendInputToTerminal !== false;
+              return true;
+            });
+            respond({ tools: enabledTools });
             break;
+          }
 
           case 'tools/call': {
             const toolName: string = params?.name;
@@ -720,6 +752,20 @@ function startMcpServer() {
               respondError(-32602, 'Missing tool name');
               return;
             }
+
+            // Check if tool is enabled
+            const featureMap: Record<string, string> = {
+              list_terminals: 'listTerminals',
+              get_terminal_output: 'getTerminalOutput',
+              get_active_terminal_output: 'getActiveTerminalOutput',
+              send_input_to_terminal: 'sendInputToTerminal',
+            };
+            const featureKey = featureMap[toolName];
+            if (featureKey && features[featureKey] === false) {
+              respondError(-32602, `Tool '${toolName}' is disabled.`);
+              return;
+            }
+
             const known = MCP_TOOLS.find(t => t.name === toolName);
             if (!known) {
               respondError(-32602, `Unknown tool: ${toolName}`);
@@ -743,19 +789,46 @@ function startMcpServer() {
     res.end(JSON.stringify({ error: 'Not found' }));
   });
 
-  server.listen(MCP_PORT, '127.0.0.1', () => {
-    console.log(`[MCP] Server running at http://127.0.0.1:${MCP_PORT}/mcp`);
+  server.listen(port, '127.0.0.1', () => {
+    console.log(`[MCP] Server running at http://127.0.0.1:${port}/mcp`);
+    mcpCurrentPort = port;
   });
 
   server.on('error', (err: any) => {
     if (err.code === 'EADDRINUSE') {
-      console.error(`[MCP] Port ${MCP_PORT} already in use. MCP server not started.`);
+      console.error(`[MCP] Port ${port} already in use. MCP server not started.`);
     } else {
       console.error('[MCP] Server error:', err);
     }
   });
 
   return server;
+}
+
+function stopMcpServer(): Promise<void> {
+  return new Promise((resolve) => {
+    if (!mcpServer) { resolve(); return; }
+    mcpServer.close(() => {
+      mcpServer = null;
+      resolve();
+    });
+  });
+}
+
+async function applyMcpSettings(settings: any) {
+  const enabled = settings.mcpEnabled !== false;
+  const port = settings.mcpPort || 57320;
+
+  if (!enabled) {
+    await stopMcpServer();
+    return;
+  }
+
+  // Start if not running, or restart if port changed
+  if (!mcpServer || mcpCurrentPort !== port) {
+    await stopMcpServer();
+    mcpServer = startMcpServer(port);
+  }
 }
 
 function createWindow() {
@@ -788,7 +861,10 @@ function createWindow() {
 
 app.whenReady().then(() => {
   setupIpcHandlers();
-  startMcpServer();
+  const settings = loadSettings();
+  if (settings.mcpEnabled !== false) {
+    mcpServer = startMcpServer(settings.mcpPort || 57320);
+  }
   createWindow();
 });
 

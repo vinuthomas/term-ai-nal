@@ -14,8 +14,8 @@ declare global {
       sendTerminalInput: (id: string, data: string) => void;
       resizeTerminal: (id: string, cols: number, rows: number) => void;
       closeTerminal: (id: string) => void;
-      onTerminalData: (callback: (id: string, data: string) => void) => void;
-      onTerminalExit: (callback: (id: string) => void) => void;
+      onTerminalData: (callback: (id: string, data: string) => void) => () => void;
+      onTerminalExit: (callback: (id: string) => void) => () => void;
       getSettings: () => Promise<any>;
       saveSettings: (settings: any) => Promise<boolean>;
       askAI: (prompt: string) => Promise<string>;
@@ -28,6 +28,7 @@ declare global {
       getOllamaModels: (baseUrl: string) => Promise<string[]>;
       setMcpActivePane: (id: string) => void;
       setMcpPaneLabels: (labels: Record<string, string>) => void;
+      getMcpUrl: () => Promise<string>;
     };
   }
 }
@@ -749,7 +750,7 @@ const App: React.FC = () => {
               <Panel minSize={10} style={{ overflow: 'hidden' }}>
                 {renderNode(child)}
               </Panel>
-              {i < node.children.length - 1 && (
+              {i < (node.children?.length ?? 0) - 1 && (
                  <PanelResizeHandle style={handleStyle} />
               )}
             </React.Fragment>
@@ -865,7 +866,7 @@ const App: React.FC = () => {
   );
 };
 
-const styles: { [key: string]: React.CSSProperties } = {
+const styles: { [key: string]: React.CSSProperties & { WebkitAppRegion?: string } } = {
   dragRegion: {
     height: '30px',
     width: '100%',

@@ -97,14 +97,16 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       const fontFamily = settings.fontFamily || DEFAULT_FONT_FAMILY;
 
       // Create new terminal
-      term = new Terminal({
+      // unicodeVersion is a proposed API not yet in the official type defs
+      const termOptions: any = {
         cursorBlink: true,
         fontSize: settings.fontSize || 14,
         fontFamily,
         unicodeVersion: '11',
         theme: selectedTheme,
         allowProposedApi: true,
-      });
+      };
+      term = new Terminal(termOptions);
 
       fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
