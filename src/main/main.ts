@@ -25,6 +25,7 @@ const defaultSettings = {
   // MCP settings
   mcpEnabled: true, // Enable/disable MCP server
   mcpPort: 57320, // Port for MCP server
+  mcpBufferSizeKB: 500, // Per-terminal in-memory buffer size in KB (overflow spills to temp file)
   mcpFeatures: {
     listTerminals: true,
     getTerminalOutput: true,
@@ -341,29 +342,79 @@ const closingTerminals = new Set<string>(); // Track terminals being intentional
 const shell = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
 
 // --- Terminal Output Buffers ---
-const OUTPUT_BUFFER_MAX_CHARS = 500_000; // ~500 KB per terminal
 // Strip ANSI escape sequences for clean text storage
 const ANSI_RE = /\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][0-9A-Za-z]|\x1b[DEMOST=>]|\x07|\x08|\x0d/g;
 const terminalOutputBuffers = new Map<string, string>();
+// Spill files: when in-memory buffer is full, oldest content overflows to a per-terminal temp file
+const terminalSpillFiles = new Map<string, string>();
+
+function getBufferMaxChars(): number {
+  const settings = loadSettings();
+  const kb = settings.mcpBufferSizeKB ?? 500;
+  return Math.max(1024, kb * 1024); // minimum 1 KB, convert to chars (~1 char ≈ 1 byte for ASCII)
+}
 
 function appendToBuffer(id: string, rawData: string) {
   const clean = rawData.replace(ANSI_RE, '');
+  if (!clean) return;
+  const maxChars = getBufferMaxChars();
   const current = terminalOutputBuffers.get(id) || '';
   const combined = current + clean;
-  // Trim from the start if over the cap
-  terminalOutputBuffers.set(
-    id,
-    combined.length > OUTPUT_BUFFER_MAX_CHARS
-      ? combined.slice(combined.length - OUTPUT_BUFFER_MAX_CHARS)
-      : combined
-  );
+
+  if (combined.length > maxChars) {
+    // Spill the oldest portion to the temp file
+    const spillChunk = combined.slice(0, combined.length - maxChars);
+    const keepChunk = combined.slice(combined.length - maxChars);
+
+    // Write spill chunk to temp file (append)
+    let spillPath = terminalSpillFiles.get(id);
+    if (!spillPath) {
+      spillPath = path.join(os.tmpdir(), `term-ai-nal-buffer-${id}.txt`);
+      terminalSpillFiles.set(id, spillPath);
+    }
+    try {
+      fs.appendFileSync(spillPath, spillChunk, 'utf-8');
+    } catch (e) {
+      console.error(`[Buffer] Failed to write spill file for terminal ${id}:`, e);
+    }
+    terminalOutputBuffers.set(id, keepChunk);
+  } else {
+    terminalOutputBuffers.set(id, combined);
+  }
 }
 
 function getBufferLines(id: string, maxLines?: number): string {
-  const buf = terminalOutputBuffers.get(id) || '';
-  if (!maxLines) return buf;
-  const lines = buf.split('\n');
+  const memBuf = terminalOutputBuffers.get(id) || '';
+  const spillPath = terminalSpillFiles.get(id);
+
+  let fullBuf: string;
+  if (spillPath && fs.existsSync(spillPath)) {
+    try {
+      const spillContent = fs.readFileSync(spillPath, 'utf-8');
+      fullBuf = spillContent + memBuf;
+    } catch (e) {
+      console.error(`[Buffer] Failed to read spill file for terminal ${id}:`, e);
+      fullBuf = memBuf;
+    }
+  } else {
+    fullBuf = memBuf;
+  }
+
+  if (!maxLines) return fullBuf;
+  const lines = fullBuf.split('\n');
   return lines.slice(-maxLines).join('\n');
+}
+
+function cleanupSpillFile(id: string) {
+  const spillPath = terminalSpillFiles.get(id);
+  if (spillPath) {
+    try {
+      if (fs.existsSync(spillPath)) fs.unlinkSync(spillPath);
+    } catch (e) {
+      console.error(`[Buffer] Failed to delete spill file for terminal ${id}:`, e);
+    }
+    terminalSpillFiles.delete(id);
+  }
 }
 
 // --- MCP Server State (metadata pushed from renderer) ---
@@ -465,6 +516,7 @@ function setupIpcHandlers() {
       ptyProcesses.delete(id);
     }
     terminalOutputBuffers.delete(id);
+    cleanupSpillFile(id);
   });
 
   // Settings & AI
@@ -496,8 +548,14 @@ function setupIpcHandlers() {
   });
 
   // Utilities
-  ipcMain.handle('open-external', async (event, url) => {
-    try {
+  ipcMain.handle('get-system-memory', () => {
+    return {
+      totalMB: Math.floor(os.totalmem() / 1024 / 1024),
+      freeMB: Math.floor(os.freemem() / 1024 / 1024),
+    };
+  });
+
+  ipcMain.handle('open-external', async (event, url) => {    try {
       const parsedUrl = new URL(url);
       if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
         console.error('Blocked potentially unsafe URL:', url);
@@ -870,6 +928,11 @@ app.whenReady().then(() => {
 
 // Before quitting, update the saved session with the latest CWDs
 app.on('before-quit', () => {
+  // Clean up all spill files
+  for (const id of terminalSpillFiles.keys()) {
+    cleanupSpillFile(id);
+  }
+
   try {
     const settings = loadSettings();
     if (!settings.restoreSession) return;

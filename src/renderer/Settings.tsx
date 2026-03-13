@@ -20,6 +20,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   // MCP state
   const [mcpEnabled, setMcpEnabled] = useState(true);
   const [mcpPort, setMcpPort] = useState(57320);
+  const [mcpBufferSizeKB, setMcpBufferSizeKB] = useState(500);
+  const [systemTotalMB, setSystemTotalMB] = useState(0);
   const [mcpFeatures, setMcpFeatures] = useState({
     listTerminals: true,
     getTerminalOutput: true,
@@ -43,6 +45,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       // MCP settings
       setMcpEnabled(s.mcpEnabled !== false);
       setMcpPort(s.mcpPort || 57320);
+      setMcpBufferSizeKB(s.mcpBufferSizeKB ?? 500);
       setMcpFeatures({
         listTerminals: s.mcpFeatures?.listTerminals !== false,
         getTerminalOutput: s.mcpFeatures?.getTerminalOutput !== false,
@@ -53,6 +56,9 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
       const url = await window.electronAPI.getMcpUrl();
       setMcpUrl(url);
+
+      const mem = await window.electronAPI.getSystemMemory();
+      setSystemTotalMB(mem.totalMB);
 
       if (s.provider === 'ollama') {
         fetchOllamaModels(s.baseUrl || 'http://localhost:11434');
@@ -92,6 +98,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       restoreSession,
       mcpEnabled,
       mcpPort,
+      mcpBufferSizeKB,
       mcpFeatures,
     });
     // Trigger terminal refresh to apply new settings
@@ -475,9 +482,41 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
               </small>
             </div>
 
-            {/* Feature Toggles */}
+            {/* Buffer Size */}
             <div style={styles.group}>
-              <label style={styles.label}>Enabled Tools</label>
+              <label style={styles.label}>Per-Terminal Buffer Size (KB)</label>
+              {(() => {
+                const maxKB = systemTotalMB > 0 ? Math.floor(systemTotalMB * 0.1 * 1024) : 25600;
+                const isOverLimit = mcpBufferSizeKB > maxKB;
+                return (
+                  <>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                      <input
+                        type="number"
+                        min={1}
+                        max={maxKB}
+                        value={mcpBufferSizeKB}
+                        onChange={(e) => setMcpBufferSizeKB(Math.max(1, Number(e.target.value)))}
+                        style={{ ...styles.input, width: '120px' }}
+                      />
+                      <span style={{ color: '#aaa', fontSize: '12px' }}>KB</span>
+                    </div>
+                    {isOverLimit && (
+                      <small style={{ color: '#f48771', marginTop: '4px', display: 'block' }}>
+                        Warning: exceeds 10% of total RAM ({maxKB.toLocaleString()} KB max recommended).
+                      </small>
+                    )}
+                    <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
+                      In-memory buffer per terminal (default: 500 KB). When full, older output spills seamlessly to a temp file — no output is lost.
+                      {systemTotalMB > 0 && ` System RAM: ${systemTotalMB.toLocaleString()} MB.`}
+                    </small>
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Feature Toggles */}
+            <div style={styles.group}>              <label style={styles.label}>Enabled Tools</label>
               <small style={{ color: '#666', marginBottom: '8px', display: 'block' }}>
                 Disable individual tools to restrict what AI agents can do.
               </small>

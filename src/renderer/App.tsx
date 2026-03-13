@@ -29,6 +29,7 @@ declare global {
       setMcpActivePane: (id: string) => void;
       setMcpPaneLabels: (labels: Record<string, string>) => void;
       getMcpUrl: () => Promise<string>;
+      getSystemMemory: () => Promise<{ totalMB: number; freeMB: number }>;
     };
   }
 }
