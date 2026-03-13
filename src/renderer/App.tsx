@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Settings as SettingsIcon, Loader, RefreshCw, Columns, Rows, X, ArrowRight, ArrowLeft, ArrowDown, ArrowUp, HelpCircle } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from './ResizablePanels';
-import TerminalPane from './TerminalPane';
+import TerminalPane, { clearTerminal, copyOrInterrupt, pasteToTerminal, selectAllTerminal, clearScreenTerminal } from './TerminalPane';
 import Settings from './Settings';
 import Help from './Help';
 
@@ -667,6 +667,40 @@ const App: React.FC = () => {
         closePane(activePaneId);
       }
 
+      // Terminal shortcuts — only when AI bar/settings/help are not open
+      if (!showAiBar && !showSettings && !showHelp) {
+        // Cmd+K — clear terminal screen + scrollback (like iTerm2)
+        if (e.metaKey && (e.key === 'k' || e.key === 'K') && !e.shiftKey && !e.ctrlKey) {
+          e.preventDefault();
+          clearTerminal(activePaneId);
+          return;
+        }
+        // Cmd+L — clear screen (preserve scrollback, like Ctrl+L)
+        if (e.metaKey && (e.key === 'l' || e.key === 'L') && !e.shiftKey && !e.ctrlKey) {
+          e.preventDefault();
+          clearScreenTerminal(activePaneId);
+          return;
+        }
+        // Cmd+C — copy selection if any, otherwise send SIGINT
+        if (e.metaKey && (e.key === 'c' || e.key === 'C') && !e.shiftKey && !e.ctrlKey) {
+          e.preventDefault();
+          copyOrInterrupt(activePaneId);
+          return;
+        }
+        // Cmd+V — paste clipboard into terminal
+        if (e.metaKey && (e.key === 'v' || e.key === 'V') && !e.shiftKey && !e.ctrlKey) {
+          e.preventDefault();
+          pasteToTerminal(activePaneId);
+          return;
+        }
+        // Cmd+A — select all terminal text
+        if (e.metaKey && (e.key === 'a' || e.key === 'A') && !e.shiftKey && !e.ctrlKey) {
+          e.preventDefault();
+          selectAllTerminal(activePaneId);
+          return;
+        }
+      }
+
       if (e.key === 'Escape') {
         const wasAiBarOpen = showAiBar;
         setShowAiBar(false);
@@ -685,7 +719,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activePaneId, terminals, layout, showAiBar]);
+  }, [activePaneId, terminals, layout, showAiBar, showSettings, showHelp]);
 
   // --- Recursive Renderer ---
   const renderNode = (node: LayoutNode) => {

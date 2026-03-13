@@ -14,6 +14,51 @@ interface TerminalPaneProps {
 // Global store for terminal instances AND their container divs
 const globalTerminals = new Map<string, { term: Terminal, fitAddon: FitAddon, containerDiv: HTMLDivElement }>();
 
+// --- Terminal action helpers (called from App.tsx keyboard handlers) ---
+
+/** Clear terminal screen and scrollback buffer (like Cmd+K in iTerm2) */
+export function clearTerminal(id: string) {
+  const entry = globalTerminals.get(id);
+  if (!entry) return;
+  // Clear scrollback then clear visible screen
+  entry.term.write('\x1b[3J\x1b[H\x1b[2J');
+  // Also send clear to the PTY so shell state is consistent
+  window.electronAPI.sendTerminalInput(id, '\x0c');
+}
+
+/** Copy selected text to clipboard, or send SIGINT if nothing is selected */
+export function copyOrInterrupt(id: string) {
+  const entry = globalTerminals.get(id);
+  if (!entry) return;
+  const selection = entry.term.getSelection();
+  if (selection) {
+    navigator.clipboard.writeText(selection).catch(() => {});
+  } else {
+    window.electronAPI.sendTerminalInput(id, '\x03'); // Ctrl+C / SIGINT
+  }
+}
+
+/** Paste clipboard text into the terminal PTY */
+export async function pasteToTerminal(id: string) {
+  try {
+    const text = await navigator.clipboard.readText();
+    if (text) window.electronAPI.sendTerminalInput(id, text);
+  } catch {
+    // Clipboard access denied — silently ignore
+  }
+}
+
+/** Select all text in the terminal */
+export function selectAllTerminal(id: string) {
+  const entry = globalTerminals.get(id);
+  if (entry) entry.term.selectAll();
+}
+
+/** Send Ctrl+L (clear screen, preserve scrollback) to the PTY */
+export function clearScreenTerminal(id: string) {
+  window.electronAPI.sendTerminalInput(id, '\x0c');
+}
+
 // Prioritized Unicode-capable font stack covering macOS, Windows, and Linux.
 // Nerd Fonts first (user-installed, cross-platform), then platform system fonts.
 const DEFAULT_FONT_FAMILY =
