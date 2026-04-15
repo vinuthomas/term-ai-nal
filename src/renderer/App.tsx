@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Settings as SettingsIcon, Loader, RefreshCw, Columns, Rows, X, ArrowRight, ArrowLeft, ArrowDown, ArrowUp, HelpCircle } from 'lucide-react';
+import { Settings as SettingsIcon, Loader, RefreshCw, Columns, Rows, X, ArrowRight, ArrowLeft, ArrowDown, ArrowUp, HelpCircle, ListChecks, History, ChevronLeft } from 'lucide-react';
 import { Panel, PanelGroup, PanelResizeHandle } from './ResizablePanels';
-import TerminalPane, { clearTerminal, copyOrInterrupt, pasteToTerminal, selectAllTerminal, clearScreenTerminal } from './TerminalPane';
+import TerminalPane, { clearTerminal, copyOrInterrupt, pasteToTerminal, pasteImageToTerminal, selectAllTerminal, clearScreenTerminal } from './TerminalPane';
 import Settings from './Settings';
 import Help from './Help';
 
@@ -19,6 +19,7 @@ declare global {
       getSettings: () => Promise<any>;
       saveSettings: (settings: any) => Promise<boolean>;
       askAI: (prompt: string) => Promise<string>;
+      askAIPlan: (goal: string, cwd: string) => Promise<string>;
       openExternal: (url: string) => Promise<boolean>;
       parseItermTheme: (xmlContent: string) => Promise<any>;
       saveSession: (sessionData: any) => Promise<boolean>;
@@ -153,6 +154,23 @@ const App: React.FC = () => {
   const [promptHistory, setPromptHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
+  // Task planner state
+  const [showPlanner, setShowPlanner] = useState(false);
+  const [plannerInput, setPlannerInput] = useState('');
+  const [plannerSteps, setPlannerSteps] = useState<{ cmd: string; explanation: string }[]>([]);
+  const [plannerCurrentStep, setPlannerCurrentStep] = useState(0);
+  const [isPlannerProcessing, setIsPlannerProcessing] = useState(false);
+  const [plannerExecuted, setPlannerExecuted] = useState<Set<number>>(new Set());
+  // Planner window position + size
+  const [plannerPos, setPlannerPos] = useState({ x: 0, y: 0, initialised: false });
+  const [plannerSize, setPlannerSize] = useState({ w: 560, h: 400 });
+  const plannerDragRef = React.useRef<{ startX: number; startY: number; origX: number; origY: number } | null>(null);
+  const plannerResizeRef = React.useRef<{ startX: number; startY: number; origW: number; origH: number } | null>(null);
+  // Planner history
+  type PlannerHistoryEntry = { goal: string; steps: { cmd: string; explanation: string }[]; timestamp: number };
+  const [plannerHistory, setPlannerHistory] = useState<PlannerHistoryEntry[]>([]);
+  const [showPlannerHistory, setShowPlannerHistory] = useState(false);
+
   const refineInputRef = React.useRef<HTMLInputElement>(null);
   const aiInputRef = React.useRef<HTMLInputElement>(null);
 
@@ -176,6 +194,27 @@ const App: React.FC = () => {
       console.error('Failed to save prompt history:', e);
     }
   }, [promptHistory]);
+
+  // Load planner history from localStorage on mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('planner-history');
+      if (saved) {
+        setPlannerHistory(JSON.parse(saved));
+      }
+    } catch (e) {
+      console.error('Failed to load planner history:', e);
+    }
+  }, []);
+
+  // Save planner history to localStorage when it changes
+  useEffect(() => {
+    try {
+      localStorage.setItem('planner-history', JSON.stringify(plannerHistory));
+    } catch (e) {
+      console.error('Failed to save planner history:', e);
+    }
+  }, [plannerHistory]);
 
   // --- Sync MCP metadata to main process ---
   useEffect(() => {
@@ -579,6 +618,125 @@ const App: React.FC = () => {
     }, 50);
   }, [activePaneId]);
 
+  // --- Task Planner Logic ---
+  const openPlanner = useCallback(() => {
+    setPlannerInput('');
+    setPlannerSteps([]);
+    setPlannerCurrentStep(0);
+    setPlannerExecuted(new Set());
+    setShowPlannerHistory(false);
+    // Centre the window on first open
+    setPlannerPos(prev => prev.initialised ? prev : {
+      x: Math.round((window.innerWidth - 560) / 2),
+      y: Math.round((window.innerHeight - 400) / 3),
+      initialised: true,
+    });
+    setShowPlanner(true);
+  }, []);
+
+  const closePlanner = useCallback(() => {
+    setShowPlanner(false);
+    setPlannerInput('');
+    setPlannerSteps([]);
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent('terminal-focus-active', { detail: { id: activePaneId } }));
+    }, 50);
+  }, [activePaneId]);
+
+  // Drag handlers
+  const onPlannerDragStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    plannerDragRef.current = { startX: e.clientX, startY: e.clientY, origX: plannerPos.x, origY: plannerPos.y };
+    const onMove = (ev: MouseEvent) => {
+      if (!plannerDragRef.current) return;
+      const dx = ev.clientX - plannerDragRef.current.startX;
+      const dy = ev.clientY - plannerDragRef.current.startY;
+      setPlannerPos(prev => ({
+        ...prev,
+        x: Math.max(0, Math.min(window.innerWidth - plannerSize.w, plannerDragRef.current!.origX + dx)),
+        y: Math.max(0, Math.min(window.innerHeight - 60, plannerDragRef.current!.origY + dy)),
+      }));
+    };
+    const onUp = () => {
+      plannerDragRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [plannerPos.x, plannerPos.y, plannerSize.w]);
+
+  // Resize handlers
+  const onPlannerResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    plannerResizeRef.current = { startX: e.clientX, startY: e.clientY, origW: plannerSize.w, origH: plannerSize.h };
+    const onMove = (ev: MouseEvent) => {
+      if (!plannerResizeRef.current) return;
+      const dw = ev.clientX - plannerResizeRef.current.startX;
+      const dh = ev.clientY - plannerResizeRef.current.startY;
+      setPlannerSize({
+        w: Math.max(340, plannerResizeRef.current.origW + dw),
+        h: Math.max(200, plannerResizeRef.current.origH + dh),
+      });
+    };
+    const onUp = () => {
+      plannerResizeRef.current = null;
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  }, [plannerSize.w, plannerSize.h]);
+
+  const handlePlannerSubmit = useCallback(async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!plannerInput.trim()) return;
+    setIsPlannerProcessing(true);
+    setPlannerSteps([]);
+    setPlannerCurrentStep(0);
+    setPlannerExecuted(new Set());
+    try {
+      let cwd = '';
+      try { cwd = await window.electronAPI.getTerminalCwd(activePaneId); } catch {}
+      const raw = await window.electronAPI.askAIPlan(plannerInput.trim(), cwd);
+      const steps = JSON.parse(raw);
+      if (Array.isArray(steps) && steps.length > 0) {
+        setPlannerSteps(steps);
+        setPlannerCurrentStep(0);
+        // Save to history (newest first, max 50 entries)
+        setPlannerHistory(prev => {
+          const entry = { goal: plannerInput.trim(), steps, timestamp: Date.now() };
+          return [entry, ...prev].slice(0, 50);
+        });
+      } else {
+        setPlannerSteps([{ cmd: 'echo "No steps generated"', explanation: 'AI returned empty plan' }]);
+      }
+    } catch (err) {
+      setPlannerSteps([{ cmd: 'echo "Failed to generate plan"', explanation: 'AI service error' }]);
+    } finally {
+      setIsPlannerProcessing(false);
+    }
+  }, [plannerInput, activePaneId]);
+
+  const executePlannerStep = useCallback((index: number) => {
+    const step = plannerSteps[index];
+    if (!step) return;
+    window.electronAPI.sendTerminalInput(activePaneId, step.cmd + '\n');
+    setPlannerExecuted(prev => new Set(prev).add(index));
+    if (index + 1 < plannerSteps.length) {
+      setPlannerCurrentStep(index + 1);
+    }
+  }, [plannerSteps, activePaneId]);
+
+  const executePlannerStepAndClose = useCallback((index: number) => {
+    executePlannerStep(index);
+    // Only close if it's the last step
+    if (index + 1 >= plannerSteps.length) {
+      setTimeout(closePlanner, 100);
+    }
+  }, [executePlannerStep, plannerSteps.length, closePlanner]);
+
   // Handle AI bar keyboard shortcuts
   useEffect(() => {
     if (!showAiBar) return;
@@ -635,6 +793,11 @@ const App: React.FC = () => {
         e.preventDefault();
         setShowAiBar(true);
       }
+      // Task Planner (Cmd+Shift+M)
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && (e.key === 'M' || e.key === 'm')) {
+        e.preventDefault();
+        openPlanner();
+      }
       // Switch to pane by number (Cmd+1 through Cmd+9)
       if ((e.metaKey || e.ctrlKey) && !e.shiftKey && /^[1-9]$/.test(e.key)) {
         e.preventDefault();
@@ -687,10 +850,15 @@ const App: React.FC = () => {
           copyOrInterrupt(activePaneId);
           return;
         }
-        // Cmd+V — paste clipboard into terminal
+        // Cmd+V — paste clipboard into terminal (try image first, then text)
         if (e.metaKey && (e.key === 'v' || e.key === 'V') && !e.shiftKey && !e.ctrlKey) {
           e.preventDefault();
-          pasteToTerminal(activePaneId);
+          // Try pasting an image first; if no image found, fall back to text paste
+          pasteImageToTerminal(activePaneId).then((didPasteImage) => {
+            if (!didPasteImage) {
+              pasteToTerminal(activePaneId);
+            }
+          });
           return;
         }
         // Cmd+A — select all terminal text
@@ -709,8 +877,9 @@ const App: React.FC = () => {
         setShowSettings(false);
         setShowHelp(false);
         setRefinementText('');
+        if (showPlanner) { setShowPlanner(false); setPlannerInput(''); setPlannerSteps([]); }
         // Focus the active terminal if AI bar was open
-        if (wasAiBarOpen) {
+        if (wasAiBarOpen || showPlanner) {
           setTimeout(() => {
             window.dispatchEvent(new CustomEvent('terminal-focus-active', { detail: { id: activePaneId } }));
           }, 50);
@@ -719,7 +888,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [activePaneId, terminals, layout, showAiBar, showSettings, showHelp]);
+  }, [activePaneId, terminals, layout, showAiBar, showSettings, showHelp, showPlanner, openPlanner]);
 
   // --- Recursive Renderer ---
   const renderNode = (node: LayoutNode) => {
@@ -878,6 +1047,9 @@ const App: React.FC = () => {
             <ArrowUp size={18} color="#999" />
         </button>
         <div style={styles.divider} />
+        <button onClick={openPlanner} style={styles.toolBtn} title="Task Planner (Cmd+Shift+M)">
+            <ListChecks size={20} color="#999" />
+        </button>
         <button onClick={() => setShowHelp(true)} style={styles.toolBtn} title="Keyboard Shortcuts">
             <HelpCircle size={20} color="#999" />
         </button>
@@ -906,6 +1078,192 @@ const App: React.FC = () => {
       <div style={styles.terminalContainer}>
         {sessionRestored ? renderNode(layout) : null}
       </div>
+
+      {/* Task Planner Overlay */}
+      {showPlanner && (
+        <div style={{
+          position: 'fixed',
+          left: plannerPos.x,
+          top: plannerPos.y,
+          width: plannerSize.w,
+          height: plannerSize.h,
+          zIndex: 200,
+          display: 'flex',
+          flexDirection: 'column',
+          backgroundColor: '#2d2d2d',
+          borderRadius: '8px',
+          boxShadow: '0 4px 24px rgba(0,0,0,0.6)',
+          border: '1px solid #444',
+          overflow: 'hidden',
+          userSelect: plannerDragRef.current || plannerResizeRef.current ? 'none' : 'auto',
+        }}>
+          {/* Title bar — drag handle */}
+          <div
+            onMouseDown={onPlannerDragStart}
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '8px 12px', backgroundColor: '#252526', cursor: 'grab', flexShrink: 0, borderBottom: '1px solid #333' }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#bd93f9', fontSize: '12px', fontWeight: 'bold', textTransform: 'uppercase' }}>
+              {showPlannerHistory ? (
+                <button
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={() => setShowPlannerHistory(false)}
+                  style={{ background: 'none', border: 'none', color: '#bd93f9', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '4px', padding: 0, fontSize: '12px', fontWeight: 'bold' }}
+                >
+                  <ChevronLeft size={14} /> Back
+                </button>
+              ) : (
+                <><ListChecks size={14} /> Task Planner</>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {!showPlannerHistory && (
+                <button
+                  onMouseDown={e => e.stopPropagation()}
+                  onClick={() => setShowPlannerHistory(true)}
+                  title="View history"
+                  style={{ background: 'none', border: 'none', color: plannerHistory.length > 0 ? '#bd93f9' : '#555', cursor: plannerHistory.length > 0 ? 'pointer' : 'default', display: 'flex' }}
+                >
+                  <History size={14} />
+                </button>
+              )}
+              <button onMouseDown={e => e.stopPropagation()} onClick={closePlanner} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', display: 'flex' }}>
+                <X size={14} />
+              </button>
+            </div>
+          </div>
+          {/* Scrollable content area */}
+          <div style={{ flex: 1, overflowY: 'auto', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+            {showPlannerHistory ? (
+              // --- History view ---
+              plannerHistory.length === 0 ? (
+                <div style={{ color: '#666', fontSize: '12px', textAlign: 'center', marginTop: '20px' }}>No history yet. Generate a plan to see it here.</div>
+              ) : (
+                plannerHistory.map((entry, idx) => (
+                  <div
+                    key={entry.timestamp}
+                    style={{ padding: '8px 10px', borderRadius: '6px', border: '1px solid #333', backgroundColor: '#1a1a1a', cursor: 'pointer', transition: 'border-color 0.15s' }}
+                    onClick={() => {
+                      setPlannerInput(entry.goal);
+                      setPlannerSteps(entry.steps);
+                      setPlannerCurrentStep(0);
+                      setPlannerExecuted(new Set());
+                      setShowPlannerHistory(false);
+                    }}
+                    onMouseEnter={e => (e.currentTarget.style.borderColor = '#7a5eb8')}
+                    onMouseLeave={e => (e.currentTarget.style.borderColor = '#333')}
+                  >
+                    <div style={{ color: '#ddd', fontSize: '12px', marginBottom: '3px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{entry.goal}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                      <div style={{ color: '#666', fontSize: '11px' }}>{entry.steps.length} step{entry.steps.length !== 1 ? 's' : ''}</div>
+                      <div style={{ color: '#555', fontSize: '10px' }}>{new Date(entry.timestamp).toLocaleDateString()} {new Date(entry.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
+                    </div>
+                  </div>
+                ))
+              )
+            ) : plannerSteps.length === 0 ? (
+              <form onSubmit={handlePlannerSubmit} style={{ width: '100%' }}>
+                <input
+                  autoFocus
+                  style={{ ...styles.input, borderBottom: '1px solid #444', paddingBottom: '8px' }}
+                  placeholder="Describe your multi-step task... (e.g. set up a Python project with venv)"
+                  value={plannerInput}
+                  onChange={(e) => setPlannerInput(e.target.value)}
+                  disabled={isPlannerProcessing}
+                />
+                {isPlannerProcessing && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#aaa', marginTop: '10px' }}>
+                    <Loader className="spin" size={16} /> Generating plan...
+                  </div>
+                )}
+              </form>
+            ) : (
+              <>
+                <div style={{ color: '#aaa', fontSize: '11px', marginBottom: '4px' }}>
+                  Step {Math.min(plannerCurrentStep + 1, plannerSteps.length)} of {plannerSteps.length} — click a step to run it
+                </div>
+                {plannerSteps.map((step, i) => {
+                  const isExecuted = plannerExecuted.has(i);
+                  const isCurrent = i === plannerCurrentStep;
+                  return (
+                    <div
+                      key={i}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '10px',
+                        padding: '8px 10px',
+                        borderRadius: '6px',
+                        backgroundColor: isExecuted ? 'rgba(80,250,123,0.07)' : isCurrent ? 'rgba(189,147,249,0.1)' : '#1a1a1a',
+                        border: `1px solid ${isExecuted ? '#388a34' : isCurrent ? '#7a5eb8' : '#333'}`,
+                        cursor: isExecuted ? 'default' : 'pointer',
+                        opacity: isExecuted ? 0.7 : 1,
+                        transition: 'all 0.15s',
+                      }}
+                      onClick={() => !isExecuted && executePlannerStepAndClose(i)}
+                    >
+                      <div style={{
+                        width: '20px',
+                        height: '20px',
+                        borderRadius: '50%',
+                        backgroundColor: isExecuted ? '#388a34' : isCurrent ? '#7a5eb8' : '#333',
+                        color: '#fff',
+                        fontSize: '11px',
+                        fontWeight: 'bold',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        {isExecuted ? '✓' : i + 1}
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ color: '#ddd', fontSize: '12px', marginBottom: '2px' }}>{step.explanation}</div>
+                        <code style={{ color: isExecuted ? '#888' : '#50fa7b', fontSize: '12px', wordBreak: 'break-all' }}>{step.cmd}</code>
+                      </div>
+                      {!isExecuted && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); executePlannerStepAndClose(i); }}
+                          style={{
+                            background: isCurrent ? '#7a5eb8' : 'none',
+                            border: `1px solid ${isCurrent ? '#7a5eb8' : '#555'}`,
+                            borderRadius: '4px',
+                            color: isCurrent ? '#fff' : '#888',
+                            padding: '3px 8px',
+                            cursor: 'pointer',
+                            fontSize: '11px',
+                            flexShrink: 0,
+                          }}
+                        >
+                          Run
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px' }}>
+                  <button
+                    onClick={() => { setPlannerSteps([]); setPlannerInput(''); setPlannerCurrentStep(0); setPlannerExecuted(new Set()); }}
+                    style={{ background: 'none', border: '1px solid #555', color: '#aaa', padding: '5px 12px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}
+                  >
+                    New Plan
+                  </button>
+                  <button onClick={closePlanner} style={styles.cancelButton}>Close</button>
+                </div>
+              </>
+            )}
+          </div>
+          {/* Resize handle */}
+          <div
+            onMouseDown={onPlannerResizeStart}
+            style={{ position: 'absolute', right: 0, bottom: 0, width: '16px', height: '16px', cursor: 'nwse-resize', opacity: 0.4 }}
+            title="Drag to resize"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="#aaa">
+              <path d="M11 5l-6 6M14 8l-6 6M14 11l-3 3" stroke="#aaa" strokeWidth="1.5" strokeLinecap="round"/>
+            </svg>
+          </div>
+        </div>
+      )}
 
       {/* AI Bar */}
       {showAiBar && (

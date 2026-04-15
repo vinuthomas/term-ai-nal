@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useLayoutEffect, useState } from 'react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
+import { ImageAddon } from '@xterm/addon-image';
 import '@xterm/xterm/css/xterm.css';
 import { themes } from './themes';
 
@@ -38,14 +39,49 @@ export function copyOrInterrupt(id: string) {
   }
 }
 
-/** Paste clipboard text into the terminal PTY */
+/** Paste clipboard text into the terminal PTY with bracketed paste support */
 export async function pasteToTerminal(id: string) {
   try {
     const text = await navigator.clipboard.readText();
-    if (text) window.electronAPI.sendTerminalInput(id, text);
+    if (text) {
+      // Wrap in bracketed paste escape sequences so shells/editors
+      // correctly handle multi-line content as pasted text (not typed input)
+      const bracketedPaste = `\x1b[200~${text}\x1b[201~`;
+      window.electronAPI.sendTerminalInput(id, bracketedPaste);
+    }
   } catch {
     // Clipboard access denied — silently ignore
   }
+}
+
+/** Paste image from clipboard into the terminal using iTerm2 inline image protocol */
+export async function pasteImageToTerminal(id: string): Promise<boolean> {
+  try {
+    const clipboardItems = await navigator.clipboard.read();
+    for (const item of clipboardItems) {
+      // Look for an image type in the clipboard
+      const imageType = item.types.find(t => t.startsWith('image/'));
+      if (imageType) {
+        const blob = await item.getType(imageType);
+        const arrayBuffer = await blob.arrayBuffer();
+        const base64 = btoa(
+          new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        );
+        // Render using iTerm2 inline image protocol directly in xterm.js
+        //   ESC ] 1337 ; File=[params]:base64data BEL
+        // Write to the terminal (not to the PTY — the shell doesn't understand image protocols)
+        const entry = globalTerminals.get(id);
+        if (!entry) return false;
+        const params = `inline=1;size=${blob.size};preserveAspectRatio=1`;
+        const imageSequence = `\x1b]1337;File=${params}:${base64}\x07`;
+        entry.term.write(imageSequence);
+        return true;
+      }
+    }
+  } catch {
+    // Clipboard read failed (permission denied or no image) — fall through
+  }
+  return false;
 }
 
 /** Select all text in the terminal */
@@ -155,8 +191,23 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
 
       fitAddon = new FitAddon();
       term.loadAddon(fitAddon);
+
+      // Load image addon for inline image rendering (iTerm2/Sixel protocols)
+      const imageAddon = new ImageAddon();
+      term.loadAddon(imageAddon);
+
       term.open(containerDiv);
       fitAddon.fit();
+
+      // Intercept Shift+Enter to send CSI u escape sequence (\x1b[13;2u)
+      // so applications (like OpenCode) can distinguish it from plain Enter
+      term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
+          window.electronAPI.sendTerminalInput(id, '\x1b[13;2u');
+          return false; // prevent xterm default handling
+        }
+        return true; // let xterm handle everything else
+      });
 
       // Send input to PTY (register only once)
       term.onData((data) => {
