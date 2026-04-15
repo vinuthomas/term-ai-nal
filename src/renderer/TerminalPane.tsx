@@ -79,7 +79,6 @@ export async function pasteImageToTerminal(id: string): Promise<boolean> {
         const blob = await item.getType(imageType);
 
         // Use FileReader for efficient non-blocking base64 encoding
-        // (avoids the O(n²) string-reduce freeze on large images)
         const base64 = await blobToBase64(blob);
 
         const entry = globalTerminals.get(id);
@@ -91,20 +90,23 @@ export async function pasteImageToTerminal(id: string): Promise<boolean> {
           return false;
         }
 
-        // Render using iTerm2 inline image protocol directly in xterm.js
+        // Build the full iTerm2 inline image protocol sequence:
         //   ESC ] 1337 ; File=[params]:base64data BEL
-        // Write to the terminal (not to the PTY — the shell doesn't understand image protocols)
         const params = `inline=1;size=${blob.size};preserveAspectRatio=1`;
         const imageSequence = `\x1b]1337;File=${params}:${base64}\x07`;
 
-        // Write in 64 KB chunks yielding between each so the UI stays responsive
-        const CHUNK = 65536;
-        const writeChunked = (offset: number) => {
+        // xterm.js parser operates on ~512 KB chunks internally.
+        // Write the sequence using xterm's flow-control callback: each chunk
+        // is only written after the previous one is fully parsed, preventing
+        // the main thread from blocking and keeping the UI responsive.
+        const CHUNK = 524288; // 512 KB — matches xterm.js parser buffer size
+        const writeNext = (offset: number) => {
           if (offset >= imageSequence.length) return;
-          entry.term.write(imageSequence.slice(offset, offset + CHUNK));
-          setTimeout(() => writeChunked(offset + CHUNK), 0);
+          const chunk = imageSequence.slice(offset, offset + CHUNK);
+          // The write() callback fires after xterm.js has fully parsed this chunk
+          entry.term.write(chunk, () => writeNext(offset + CHUNK));
         };
-        writeChunked(0);
+        writeNext(0);
         return true;
       }
     }
