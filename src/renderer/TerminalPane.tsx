@@ -54,6 +54,20 @@ export async function pasteToTerminal(id: string) {
   }
 }
 
+/** Convert a Blob to base64 string efficiently using FileReader (non-blocking) */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      // result is "data:<mime>;base64,<data>" — strip the prefix
+      const dataUrl = reader.result as string;
+      resolve(dataUrl.slice(dataUrl.indexOf(',') + 1));
+    };
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
 /** Paste image from clipboard into the terminal using iTerm2 inline image protocol */
 export async function pasteImageToTerminal(id: string): Promise<boolean> {
   try {
@@ -63,18 +77,34 @@ export async function pasteImageToTerminal(id: string): Promise<boolean> {
       const imageType = item.types.find(t => t.startsWith('image/'));
       if (imageType) {
         const blob = await item.getType(imageType);
-        const arrayBuffer = await blob.arrayBuffer();
-        const base64 = btoa(
-          new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
-        );
+
+        // Use FileReader for efficient non-blocking base64 encoding
+        // (avoids the O(n²) string-reduce freeze on large images)
+        const base64 = await blobToBase64(blob);
+
+        const entry = globalTerminals.get(id);
+        if (!entry) return false;
+
+        // Guard against addon-image's ~20 MB IIP size limit
+        if (base64.length > 20_000_000) {
+          console.warn('Image too large for inline display (>20 MB base64), skipping.');
+          return false;
+        }
+
         // Render using iTerm2 inline image protocol directly in xterm.js
         //   ESC ] 1337 ; File=[params]:base64data BEL
         // Write to the terminal (not to the PTY — the shell doesn't understand image protocols)
-        const entry = globalTerminals.get(id);
-        if (!entry) return false;
         const params = `inline=1;size=${blob.size};preserveAspectRatio=1`;
         const imageSequence = `\x1b]1337;File=${params}:${base64}\x07`;
-        entry.term.write(imageSequence);
+
+        // Write in 64 KB chunks yielding between each so the UI stays responsive
+        const CHUNK = 65536;
+        const writeChunked = (offset: number) => {
+          if (offset >= imageSequence.length) return;
+          entry.term.write(imageSequence.slice(offset, offset + CHUNK));
+          setTimeout(() => writeChunked(offset + CHUNK), 0);
+        };
+        writeChunked(0);
         return true;
       }
     }
