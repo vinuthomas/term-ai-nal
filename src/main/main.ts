@@ -227,6 +227,99 @@ function parseItermTheme(xmlContent: string): any {
 }
 
 // --- AI Service ---
+
+async function callAIRaw(systemPrompt: string, userPrompt: string, settings: any): Promise<string> {
+  const { provider, apiKey, model, baseUrl } = settings;
+  try {
+    if (provider === 'openai' || provider === 'perplexity') {
+      const url = provider === 'perplexity'
+        ? 'https://api.perplexity.ai/chat/completions'
+        : 'https://api.openai.com/v1/chat/completions';
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: model || (provider === 'perplexity' ? 'llama-3.1-sonar-large-128k-online' : 'gpt-4o'),
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }]
+        })
+      });
+      const data: any = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || 'API Error');
+      return data.choices[0].message.content.trim();
+    } else if (provider === 'anthropic') {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': apiKey, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify({
+          model: model || 'claude-3-5-sonnet-20240620',
+          max_tokens: 2048,
+          system: systemPrompt,
+          messages: [{ role: 'user', content: userPrompt }]
+        })
+      });
+      const data: any = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || 'API Error');
+      return data.content[0].text.trim();
+    } else if (provider === 'gemini') {
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-1.5-flash'}:generateContent?key=${apiKey}`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contents: [{ parts: [{ text: systemPrompt + '\nUser Request: ' + userPrompt }] }] })
+      });
+      const data: any = await response.json();
+      if (!response.ok) throw new Error(data.error?.message || 'API Error');
+      return data.candidates[0].content.parts[0].text.trim();
+    } else if (provider === 'ollama') {
+      const url = `${baseUrl || 'http://localhost:11434'}/api/chat`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: model || 'llama3',
+          messages: [{ role: 'system', content: systemPrompt }, { role: 'user', content: userPrompt }],
+          stream: false
+        })
+      });
+      const data: any = await response.json();
+      if (!response.ok) throw new Error('Ollama Error');
+      return data.message.content.trim();
+    }
+  } catch (error: any) {
+    throw error;
+  }
+  throw new Error('Provider not configured');
+}
+
+async function callAIPlan(goal: string, cwd: string, settings: any): Promise<string> {
+  const shell = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
+  const systemInfo = `OS: ${os.platform()} ${os.release()} (${os.arch()})\nShell: ${shell}`;
+  const systemPrompt = `You are an expert terminal assistant on ${systemInfo}.
+The user wants to accomplish a multi-step task. Break it into an ordered list of concrete shell commands.
+
+CRITICAL RULES:
+1. Return ONLY a JSON array. No prose, no markdown, no code fences.
+2. Each item in the array must be an object with exactly two string fields:
+   - "cmd": the raw ${shell} command to run
+   - "explanation": a short (max 10 words) description of what it does
+3. Use at most 10 steps.
+4. NEVER use generic placeholders like <path> or <value>. If a value is unknown, use a realistic example or ask via: {"cmd": "echo 'Specify: ...'", "explanation": "prompt user for missing info"}
+5. Use the current directory context when generating paths.
+6. Example valid response: [{"cmd":"mkdir my-project","explanation":"Create project directory"},{"cmd":"cd my-project","explanation":"Enter project directory"}]`;
+
+  const userPrompt = `Current directory: ${cwd}\nTask: ${goal}`;
+
+  try {
+    const raw = await callAIRaw(systemPrompt, userPrompt, settings);
+    // Validate it's parseable JSON
+    JSON.parse(raw);
+    return raw;
+  } catch (error: any) {
+    const safeMessage = (error.message || 'Unknown error').replace(/[^a-zA-Z0-9 _.:-]/g, '');
+    return JSON.stringify([{ cmd: `echo "AI Error: ${safeMessage}"`, explanation: 'AI service request failed' }]);
+  }
+}
+
 async function callAI(prompt: string, settings: any) {
   const shell = os.platform() === 'win32' ? 'powershell.exe' : 'zsh';
   const systemInfo = `OS: ${os.platform()} ${os.release()} (${os.arch()})\nShell: ${shell}`;
@@ -250,89 +343,12 @@ CRITICAL RULES:
    COMMAND: echo "Please specify: What is the server IP address or hostname?"
    EXPLANATION: Need specific server address to connect`;
 
-  const { provider, apiKey, model, baseUrl } = settings;
-
   try {
-    if (provider === 'openai' || provider === 'perplexity') {
-      // Perplexity is OpenAI compatible
-      const url = provider === 'perplexity' 
-        ? 'https://api.perplexity.ai/chat/completions' 
-        : 'https://api.openai.com/v1/chat/completions';
-      
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: model || (provider === 'perplexity' ? 'llama-3.1-sonar-large-128k-online' : 'gpt-4o'),
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: prompt }
-          ]
-        })
-      });
-      const data: any = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || 'API Error');
-      return data.choices[0].message.content.trim();
-
-    } else if (provider === 'anthropic') {
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': apiKey,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: model || 'claude-3-5-sonnet-20240620',
-          max_tokens: 1024,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: prompt }]
-        })
-      });
-      const data: any = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || 'API Error');
-      return data.content[0].text.trim();
-
-    } else if (provider === 'gemini') {
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-1.5-flash'}:generateContent?key=${apiKey}`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: systemPrompt + "\nUser Request: " + prompt }] }]
-        })
-      });
-      const data: any = await response.json();
-      if (!response.ok) throw new Error(data.error?.message || 'API Error');
-      return data.candidates[0].content.parts[0].text.trim();
-
-    } else if (provider === 'ollama') {
-      const url = `${baseUrl || 'http://localhost:11434'}/api/chat`;
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: model || 'llama3',
-          messages: [
-            { role: 'system', content: systemPrompt },
-            { role: 'user', content: prompt }
-          ],
-          stream: false
-        })
-      });
-      const data: any = await response.json();
-      if (!response.ok) throw new Error('Ollama Error');
-      return data.message.content.trim();
-    }
+    return await callAIRaw(systemPrompt, prompt, settings);
   } catch (error: any) {
     const safeMessage = (error.message || 'Unknown error').replace(/[^a-zA-Z0-9 _.:-]/g, '');
     return `COMMAND: echo "AI Error: ${safeMessage}"\nEXPLANATION: AI service request failed`;
   }
-
-  return `COMMAND: echo "Provider not configured"\nEXPLANATION: Select an AI provider in settings`;
 }
 
 
@@ -534,7 +550,7 @@ function createPty(id: string, cwd?: string) {
   }
 
   const ptyProcess = pty.spawn(shell, ['--login'], {
-    name: 'xterm-color',
+    name: 'xterm-256color',
     cols: 80,
     rows: 30,
     cwd: cwd || process.env.HOME,
@@ -629,6 +645,11 @@ function setupIpcHandlers() {
   ipcMain.handle('ask-ai', async (event, prompt) => {
     const settings = loadSettings();
     return await callAI(prompt, settings);
+  });
+
+  ipcMain.handle('ask-ai-plan', async (event, { goal, cwd }) => {
+    const settings = loadSettings();
+    return await callAIPlan(goal || '', cwd || '', settings);
   });
 
   // Utilities
