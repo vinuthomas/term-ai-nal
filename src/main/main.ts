@@ -554,7 +554,11 @@ function createPty(id: string, cwd?: string) {
     cols: 80,
     rows: 30,
     cwd: cwd || process.env.HOME,
-    env: process.env,
+    env: {
+      ...process.env,
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+    },
   });
 
   ptyProcess.onData((data) => {
