@@ -84,9 +84,16 @@ export async function pasteImageToTerminal(id: string): Promise<boolean> {
         const entry = globalTerminals.get(id);
         if (!entry) return false;
 
-        // Guard against addon-image's ~20 MB IIP size limit
-        if (base64.length > 20_000_000) {
-          console.warn('Image too large for inline display (>20 MB base64), skipping.');
+        // Limit inline image size to 2 MB base64 to prevent terminal freeze.
+        // Larger images block the xterm.js parser and hang the UI.
+        const MAX_BASE64 = 2_000_000; // 2 MB
+        if (base64.length > MAX_BASE64) {
+          const sizeMB = (base64.length / 1_000_000).toFixed(1);
+          const entry2 = globalTerminals.get(id);
+          if (entry2) {
+            entry2.term.write(`\r\n\x1b[33m[Term-AI-nal] Image too large to display inline (${sizeMB} MB, max 2 MB)\x1b[0m\r\n`);
+          }
+          console.warn(`Image too large for inline display (${sizeMB} MB base64), skipping.`);
           return false;
         }
 
@@ -231,11 +238,12 @@ const TerminalPane: React.FC<TerminalPaneProps> = ({ id, isActive, cwd }) => {
       term.open(containerDiv);
       fitAddon.fit();
 
-      // Intercept Shift+Enter to send CSI u escape sequence (\x1b[13;2u)
-      // so applications (like OpenCode) can distinguish it from plain Enter
+      // Intercept Shift+Enter: send \x0a (linefeed / ctrl+j) so that
+      // OpenCode's default input_newline keybinding ("ctrl+j" / "linefeed") fires.
+      // This inserts a newline in the AI prompt without submitting.
       term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
         if (e.type === 'keydown' && e.key === 'Enter' && e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey) {
-          window.electronAPI.sendTerminalInput(id, '\x1b[13;2u');
+          window.electronAPI.sendTerminalInput(id, '\x0a');
           return false; // prevent xterm default handling
         }
         return true; // let xterm handle everything else
