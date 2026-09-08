@@ -13,16 +13,16 @@ port status.
 ## Install
 
 Download the DMG from the [latest release](https://github.com/vinuthomas/term-ai-nal/releases/latest),
-open it, and drag `TermAInal.app` into `Applications`.
+open it, and drag `term-ai-nal.app` into `Applications`.
 
 **The app is ad-hoc signed only — it is not notarized.** There is no Developer
 ID or `notarytool` step yet (see Known constraints), so opening it the normal
 way shows Gatekeeper's "Apple could not verify this app is free of malware"
 and refuses to launch it. Work around it either way:
 
-- Right-click (or Control-click) `TermAInal.app` in Finder, choose **Open**,
+- Right-click (or Control-click) `term-ai-nal.app` in Finder, choose **Open**,
   then confirm **Open** again in the dialog — this only needs to happen once.
-- Or strip the quarantine flag from a terminal: `xattr -cr /Applications/TermAInal.app`.
+- Or strip the quarantine flag from a terminal: `xattr -cr /Applications/term-ai-nal.app`.
 
 Building from source (below) doesn't hit this: a locally built `.app` isn't
 quarantined, so Gatekeeper never intervenes.
@@ -43,9 +43,9 @@ quarantined, so Gatekeeper never intervenes.
 ```bash
 ./Scripts/make-app.sh            # debug build + .app bundle
 ./Scripts/make-app.sh release    # release build
-open build/TermAInal.app
+open build/term-ai-nal.app
 # or, to see stdout/NSLog:
-./build/TermAInal.app/Contents/MacOS/TermAInal
+./build/term-ai-nal.app/Contents/MacOS/TermAInal
 ```
 
 `swift build` alone typechecks but produces only a bare executable. AppKit needs
@@ -77,13 +77,13 @@ coverage in the repo.
 | `--check-cloud` | The Anthropic and Gemini request shape — auth header, schema placement, response decoding — against `Scripts/mock-ai-api.py`, which must be running. |
 
 Run them against the built binary, e.g.
-`./build/TermAInal.app/Contents/MacOS/TermAInal --check-ai`.
+`./build/term-ai-nal.app/Contents/MacOS/TermAInal --check-ai`.
 
 To run the last one, start the mock first:
 
 ```bash
 python3 Scripts/mock-ai-api.py &
-./build/TermAInal.app/Contents/MacOS/TermAInal --check-cloud
+./build/term-ai-nal.app/Contents/MacOS/TermAInal --check-cloud
 ```
 
 Not covered by any of these, and unverified at runtime: any cloud provider

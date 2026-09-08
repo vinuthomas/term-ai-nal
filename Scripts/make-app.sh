@@ -14,7 +14,7 @@ echo "==> swift build -c $CONFIG"
 swift build -c "$CONFIG"
 
 BIN="$(swift build -c "$CONFIG" --show-bin-path)/TermAInal"
-APP="build/TermAInal.app"
+APP="build/term-ai-nal.app"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

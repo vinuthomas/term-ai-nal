@@ -17,9 +17,9 @@ them. `CLAUDE.md` carries the rules; this is the reasoning behind them.
 ```bash
 ./Scripts/make-app.sh          # debug build + .app bundle
 ./Scripts/make-app.sh release  # release build
-open build/TermAInal.app
+open build/term-ai-nal.app
 # or, to see stdout/NSLog:
-./build/TermAInal.app/Contents/MacOS/TermAInal
+./build/term-ai-nal.app/Contents/MacOS/TermAInal
 ```
 
 **Xcode is required**, even though the build is a CLI one: the `@Generable`

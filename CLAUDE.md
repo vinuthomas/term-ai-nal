@@ -27,15 +27,15 @@ Plain SwiftPM package at the repo root. No `.xcodeproj` — Xcode opens `Package
 directly if you want an IDE.
 
 - `swift build` — typecheck. Enough for most changes.
-- `./Scripts/make-app.sh` — debug build plus a hand-assembled `build/TermAInal.app`.
+- `./Scripts/make-app.sh` — debug build plus a hand-assembled `build/term-ai-nal.app`.
   `./Scripts/make-app.sh release` for release. SPM emits a bare executable, and AppKit needs
   a real bundle (Info.plist, `CFBundleIdentifier`) before the menu bar, window activation
   and Keychain identity behave, so the script writes the plist, copies the bundled fonts,
   generates the `.icns` from `Resources/AppIcon.png` with `sips`/`iconutil` (cached on
   mtime), ad-hoc signs, and `touch`es the bundle so the Dock's per-path icon cache
   invalidates.
-- Run with `open build/TermAInal.app`, or
-  `./build/TermAInal.app/Contents/MacOS/TermAInal` to see stdout and `NSLog`.
+- Run with `open build/term-ai-nal.app`, or
+  `./build/term-ai-nal.app/Contents/MacOS/TermAInal` to see stdout and `NSLog`.
 
 **Xcode is required even though the build is CLI.** The Apple Intelligence provider uses
 `@Generable`, whose macro plugin (`FoundationModelsMacros`) ships with Xcode and not with the
