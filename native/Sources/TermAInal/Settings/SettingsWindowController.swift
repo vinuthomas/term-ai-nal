@@ -1,5 +1,271 @@
 import AppKit
 
+/// Draft store for keychain API keys, shared by every profile editor.
+///
+/// Keys are per *provider*, not per profile: if both profiles point at OpenAI
+/// there is one key, and editing it in either place has to mean the same thing.
+/// Nothing reaches the keychain until `commit()`, so Cancel stays a real
+/// discard, and only providers the user actually touched are rewritten.
+private final class APIKeyDrafts {
+    private var values: [String: String] = [:]
+    private var dirty: Set<String> = []
+
+    func key(for provider: String) -> String {
+        if let cached = values[provider] { return cached }
+        let stored = SettingsStore.shared.apiKey(for: provider)
+        values[provider] = stored
+        return stored
+    }
+
+    func set(_ key: String, for provider: String) {
+        guard key != self.key(for: provider) else { return }
+        values[provider] = key
+        dirty.insert(provider)
+    }
+
+    func commit() {
+        for provider in dirty {
+            SettingsStore.shared.setApiKey(values[provider] ?? "", for: provider)
+        }
+        dirty.removeAll()
+    }
+}
+
+/// The control set for one `AIProfile`, built once and instantiated per role.
+///
+/// Every popup here selects by *key* and reads back the selected item's
+/// `representedObject`, never an index into a parallel array. That closes a
+/// whole bug class: a stored value with no matching item used to leave the
+/// popup on index 0, and Save then persisted that as the user's choice.
+/// `selectByKey` guarantees a matching item exists by appending one, so the
+/// value the user never touched is the value that comes back out.
+private final class AIProfileEditor: NSView {
+    /// Only the providers that actually work. Anthropic and Gemini are not
+    /// ported yet, so listing them would offer a dead end.
+    private static let supportedProviders: [(key: String, title: String)] = [
+        ("apple", "Apple Intelligence (on-device)"),
+        ("openai", "OpenAI"),
+        ("perplexity", "Perplexity"),
+        ("ollama", "Ollama (local)"),
+    ]
+
+    private static let appleModels: [(key: String, title: String)] = [
+        ("on-device", "On-device (local, no network)"),
+        ("pcc", "Private Cloud Compute (macOS 27+)"),
+    ]
+
+    private let keys: APIKeyDrafts
+
+    private let providerPopup = NSPopUpButton()
+    private let appleModelPopup = NSPopUpButton()
+    private let apiKeyField = NSSecureTextField()
+    private let modelCombo = NSComboBox()
+    private let baseUrlField = NSTextField()
+    private let refreshModelsButton = NSButton()
+    private let availabilityLabel = NSTextField(wrappingLabelWithString: "")
+
+    // Held rather than looked up by number: rows are captured as addRow(with:)
+    // returns them, so visibility never depends on the row order staying put.
+    private var appleModelRow: NSGridRow!
+    private var statusRow: NSGridRow!
+    private var apiKeyRow: NSGridRow!
+    private var modelRow: NSGridRow!
+    private var baseUrlRow: NSGridRow!
+
+    /// Which provider's key the field currently shows, so a pending edit can be
+    /// filed under the right provider when the popup moves.
+    private var shownKeyProvider = ""
+
+    init(title: String, hint: String, keys: APIKeyDrafts) {
+        self.keys = keys
+        super.init(frame: .zero)
+        build(title: title, hint: hint)
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) is not used")
+    }
+
+    // MARK: - Layout
+
+    private func build(title: String, hint: String) {
+        for provider in Self.supportedProviders {
+            addItem(to: providerPopup, key: provider.key, title: provider.title)
+        }
+        providerPopup.target = self
+        providerPopup.action = #selector(providerChanged)
+
+        for model in Self.appleModels {
+            addItem(to: appleModelPopup, key: model.key, title: model.title)
+        }
+
+        modelCombo.isEditable = true
+        modelCombo.completes = true
+        modelCombo.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        modelCombo.widthAnchor.constraint(greaterThanOrEqualToConstant: 220).isActive = true
+
+        refreshModelsButton.title = "Reload"
+        refreshModelsButton.bezelStyle = .rounded
+        refreshModelsButton.target = self
+        refreshModelsButton.action = #selector(reloadOllamaModels)
+
+        let modelStack = NSStackView(views: [modelCombo, refreshModelsButton])
+        modelStack.orientation = .horizontal
+        modelStack.spacing = 8
+
+        baseUrlField.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+        apiKeyField.widthAnchor.constraint(greaterThanOrEqualToConstant: 300).isActive = true
+
+        availabilityLabel.font = .systemFont(ofSize: 11)
+        availabilityLabel.textColor = .secondaryLabelColor
+        availabilityLabel.preferredMaxLayoutWidth = 320
+
+        let heading = NSTextField(labelWithString: title)
+        heading.font = .boldSystemFont(ofSize: 13)
+
+        let hintLabel = NSTextField(wrappingLabelWithString: hint)
+        hintLabel.font = .systemFont(ofSize: 11)
+        hintLabel.textColor = .secondaryLabelColor
+        hintLabel.preferredMaxLayoutWidth = 480
+
+        let grid = NSGridView(numberOfColumns: 2, rows: 0)
+        grid.rowSpacing = 10
+        grid.columnSpacing = 12
+        grid.column(at: 0).xPlacement = .trailing
+        appleModelRow = addRow(to: grid, "Apple Model", appleModelPopup)
+        statusRow = addRow(to: grid, "Status", availabilityLabel)
+        apiKeyRow = addRow(to: grid, "API Key", apiKeyField)
+        modelRow = addRow(to: grid, "Model", modelStack)
+        baseUrlRow = addRow(to: grid, "Base URL", baseUrlField)
+        // Provider drives the rest, so it sits above them.
+        _ = grid.insertRow(at: 0, with: [NSTextField(labelWithString: "Provider"), providerPopup])
+
+        let stack = NSStackView(views: [heading, hintLabel, grid])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 8
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor),
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(lessThanOrEqualTo: bottomAnchor),
+        ])
+    }
+
+    private func addRow(to grid: NSGridView, _ label: String, _ control: NSView) -> NSGridRow {
+        grid.addRow(with: [NSTextField(labelWithString: label), control])
+    }
+
+    // MARK: - Key-addressed popups
+
+    private func addItem(to popup: NSPopUpButton, key: String, title: String) {
+        popup.addItem(withTitle: title)
+        popup.lastItem?.representedObject = key
+    }
+
+    /// Selects `key`, adding an item for it when nothing matches — an unknown
+    /// stored value must survive a round trip, not collapse onto index 0.
+    private func selectByKey(_ popup: NSPopUpButton, _ key: String, unsupportedTitle: (String) -> String) {
+        if let item = popup.itemArray.first(where: { $0.representedObject as? String == key }) {
+            popup.select(item)
+            return
+        }
+        addItem(to: popup, key: key, title: unsupportedTitle(key))
+        popup.selectItem(at: popup.numberOfItems - 1)
+    }
+
+    private func selectedKey(_ popup: NSPopUpButton) -> String {
+        popup.selectedItem?.representedObject as? String ?? ""
+    }
+
+    private var provider: String { selectedKey(providerPopup) }
+
+    // MARK: - Draft <-> controls
+
+    func load(_ profile: AIProfile) {
+        // Anthropic and Gemini are unported yet reachable via the one-time
+        // Electron import, so they arrive here as stored-but-unlisted values.
+        selectByKey(providerPopup, profile.provider) { "\($0) (not ported)" }
+        selectByKey(appleModelPopup, profile.appleModel) { "\($0) (unknown)" }
+        modelCombo.stringValue = profile.model
+        baseUrlField.stringValue = profile.baseUrl
+        showKey(for: provider)
+        updateVisibility()
+        updateAvailability()
+    }
+
+    func commit() -> AIProfile {
+        keys.set(apiKeyField.stringValue, for: shownKeyProvider)
+        return AIProfile(
+            provider: provider,
+            model: modelCombo.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+            baseUrl: baseUrlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines),
+            appleModel: selectedKey(appleModelPopup)
+        )
+    }
+
+    private func showKey(for provider: String) {
+        shownKeyProvider = provider
+        apiKeyField.stringValue = keys.key(for: provider)
+    }
+
+    private func updateVisibility() {
+        let isApple = provider == "apple"
+        let isOllama = provider == "ollama"
+
+        appleModelRow.isHidden = !isApple
+        statusRow.isHidden = !isApple
+        apiKeyRow.isHidden = isApple || isOllama
+        modelRow.isHidden = isApple
+        baseUrlRow.isHidden = !(provider == "openai" || isOllama)
+
+        refreshModelsButton.isHidden = !isOllama
+        if isOllama { reloadOllamaModels() }
+    }
+
+    private func updateAvailability() {
+        switch AIService.appleAvailability() {
+        case .available:
+            availabilityLabel.stringValue = "Available on this Mac."
+            availabilityLabel.textColor = .systemGreen
+        case .unavailable(let reason):
+            availabilityLabel.stringValue = reason
+            availabilityLabel.textColor = .systemOrange
+        }
+    }
+
+    // MARK: - Actions
+
+    @objc private func providerChanged() {
+        // File the visible key under the provider it was typed for before the
+        // field is repointed, otherwise switching providers discards the edit.
+        keys.set(apiKeyField.stringValue, for: shownKeyProvider)
+        showKey(for: provider)
+        updateVisibility()
+        updateAvailability()
+    }
+
+    @objc private func reloadOllamaModels() {
+        let baseUrl = baseUrlField.stringValue
+        let current = modelCombo.stringValue
+        refreshModelsButton.isEnabled = false
+
+        Task { @MainActor in
+            let models = await OllamaModels.list(baseUrl: baseUrl)
+            refreshModelsButton.isEnabled = true
+            modelCombo.removeAllItems()
+            modelCombo.addItems(withObjectValues: models)
+            // Keep whatever the user typed; only the suggestion list changed.
+            modelCombo.stringValue = current
+            modelCombo.placeholderString = models.isEmpty
+                ? "Ollama not reachable — start it to list models"
+                : "llama3"
+        }
+    }
+}
+
 /// The preferences window. Port of `Settings.tsx`, which was a three-tab React
 /// form (AI / Terminal / MCP) writing the whole settings object back at once.
 ///
@@ -11,19 +277,16 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     var onSave: ((AppSettings) -> Void)?
 
     private var draft: AppSettings
-    private var apiKey: String
+    private let apiKeys = APIKeyDrafts()
 
     // AI tab
-    private let providerPopup = NSPopUpButton()
-    private let appleModelPopup = NSPopUpButton()
-    private let apiKeyField = NSSecureTextField()
-    private let modelCombo = NSComboBox()
-    private let baseUrlField = NSTextField()
-    private let refreshModelsButton = NSButton()
-    private let availabilityLabel = NSTextField(wrappingLabelWithString: "")
+    private let profileSwitcher = NSSegmentedControl(
+        labels: ["Commands", "Assistant"], trackingMode: .selectOne, target: nil, action: nil
+    )
+    private var commandEditor: AIProfileEditor!
+    private var insightEditor: AIProfileEditor!
     private let assistantEnabledCheckbox = NSButton()
     private let assistantInsightsPopup = NSPopUpButton()
-    private var aiGrid: NSGridView!
 
     // Terminal tab
     private let fontCombo = NSComboBox()
@@ -43,29 +306,6 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let featureSendInput = NSButton()
     private let mcpUrlLabel = NSTextField(labelWithString: "")
 
-    /// Only the providers that actually work. Anthropic and Gemini are not
-    /// ported yet, so listing them would offer a dead end.
-    private static let supportedProviders: [(key: String, title: String)] = [
-        ("apple", "Apple Intelligence (on-device)"),
-        ("openai", "OpenAI"),
-        ("perplexity", "Perplexity"),
-        ("ollama", "Ollama (local)"),
-    ]
-
-    /// Supported providers, plus the stored one when it is not among them.
-    ///
-    /// Without the extra entry a config carrying `anthropic` or `gemini` — both
-    /// unported, and both reachable via the one-time Electron import — would
-    /// find no matching item, leave the popup on index 0, and get silently
-    /// rewritten to Apple on Save.
-    private var providers: [(key: String, title: String)] {
-        var list = Self.supportedProviders
-        if !list.contains(where: { $0.key == draft.provider }) {
-            list.append((draft.provider, "\(draft.provider) (not ported)"))
-        }
-        return list
-    }
-
     /// Sentinel for "no explicit family", kept distinct from an empty combo
     /// value: an editable NSComboBox does not reliably preserve an empty
     /// string, and letting it fall through to the first listed family meant
@@ -77,10 +317,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     init() {
         draft = SettingsStore.shared.settings
-        apiKey = SettingsStore.shared.apiKey
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 560, height: 420),
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 480),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -151,46 +390,35 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         return grid
     }
 
-    private func wrap(_ grid: NSGridView) -> NSView {
+    private func wrap(_ view: NSView) -> NSView {
         let container = NSView()
-        container.addSubview(grid)
+        view.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(view)
         NSLayoutConstraint.activate([
-            grid.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
-            grid.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
-            grid.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
+            view.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 16),
+            view.topAnchor.constraint(equalTo: container.topAnchor, constant: 16),
+            view.trailingAnchor.constraint(lessThanOrEqualTo: container.trailingAnchor, constant: -16),
         ])
         return container
     }
 
+    /// The two profiles get one editor each, shown one at a time — stacking both
+    /// control sets would not fit, and the choice is rarely made twice at once.
     private func buildAITab() -> NSView {
-        for provider in providers {
-            providerPopup.addItem(withTitle: provider.title)
-        }
-        providerPopup.target = self
-        providerPopup.action = #selector(providerChanged)
+        commandEditor = AIProfileEditor(
+            title: "Commands",
+            hint: "Used by the AI palette and the task planner. Pick the model whose shell syntax you trust most — a wrong flag is worse than a slow answer.",
+            keys: apiKeys
+        )
+        insightEditor = AIProfileEditor(
+            title: "Assistant",
+            hint: "Used by the sidebar's insights and questions. Apple's on-device model suits this well: free, no memory cost, and good at explaining — even though it is weaker at writing commands.",
+            keys: apiKeys
+        )
 
-        appleModelPopup.addItem(withTitle: "On-device (local, no network)")
-        appleModelPopup.addItem(withTitle: "Private Cloud Compute (macOS 27+)")
-
-        modelCombo.isEditable = true
-        modelCombo.completes = true
-
-        refreshModelsButton.title = "Reload"
-        refreshModelsButton.target = self
-        refreshModelsButton.action = #selector(reloadOllamaModels)
-
-        let modelRow = NSStackView(views: [modelCombo, refreshModelsButton])
-        modelRow.orientation = .horizontal
-        modelRow.spacing = 8
-        modelCombo.setContentHuggingPriority(.defaultLow, for: .horizontal)
-        modelCombo.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
-
-        baseUrlField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
-        apiKeyField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320).isActive = true
-
-        availabilityLabel.font = .systemFont(ofSize: 11)
-        availabilityLabel.textColor = .secondaryLabelColor
-        availabilityLabel.preferredMaxLayoutWidth = 340
+        profileSwitcher.target = self
+        profileSwitcher.action = #selector(profileSwitched)
+        profileSwitcher.selectedSegment = 0
 
         assistantEnabledCheckbox.setButtonType(.switch)
         assistantEnabledCheckbox.title = "Show the assistant sidebar"
@@ -199,19 +427,32 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         assistantInsightsPopup.addItem(withTitle: "After a command fails")
         assistantInsightsPopup.addItem(withTitle: "After every command")
 
-        // Appended last on purpose: updateProviderVisibility() addresses grid
-        // rows 1-5 by index, so new rows must go after them.
-        aiGrid = form([
-            ("Provider", providerPopup),
-            ("Apple Model", appleModelPopup),
-            ("Status", availabilityLabel),
-            ("API Key", apiKeyField),
-            ("Model", modelRow),
-            ("Base URL", baseUrlField),
-            ("Assistant", assistantEnabledCheckbox),
+        let editors = NSView()
+        for editor in [commandEditor!, insightEditor!] {
+            editor.translatesAutoresizingMaskIntoConstraints = false
+            editors.addSubview(editor)
+            NSLayoutConstraint.activate([
+                editor.leadingAnchor.constraint(equalTo: editors.leadingAnchor),
+                editor.trailingAnchor.constraint(lessThanOrEqualTo: editors.trailingAnchor),
+                editor.topAnchor.constraint(equalTo: editors.topAnchor),
+                editor.bottomAnchor.constraint(lessThanOrEqualTo: editors.bottomAnchor),
+            ])
+        }
+
+        let separator = NSBox()
+        separator.boxType = .separator
+
+        let sidebarForm = form([
+            ("Sidebar", assistantEnabledCheckbox),
             ("Insights", assistantInsightsPopup),
         ])
-        return wrap(aiGrid)
+
+        let stack = NSStackView(views: [profileSwitcher, editors, separator, sidebarForm])
+        stack.orientation = .vertical
+        stack.alignment = .leading
+        stack.spacing = 12
+        separator.widthAnchor.constraint(equalTo: stack.widthAnchor).isActive = true
+        return wrap(stack)
     }
 
     private func buildTerminalTab() -> NSView {
@@ -316,13 +557,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Draft <-> controls
 
     private func syncFromDraft() {
-        if let index = providers.firstIndex(where: { $0.key == draft.provider }) {
-            providerPopup.selectItem(at: index)
-        }
-        appleModelPopup.selectItem(at: draft.appleModel == "pcc" ? 1 : 0)
-        apiKeyField.stringValue = apiKey
-        modelCombo.stringValue = draft.model
-        baseUrlField.stringValue = draft.baseUrl
+        commandEditor.load(draft.commandProfile)
+        insightEditor.load(draft.insightProfile)
+        updateProfileVisibility()
 
         fontCombo.stringValue = draft.fontFamily.isEmpty ? Self.automaticFont : draft.fontFamily
         fontSizeField.stringValue = String(Int(draft.fontSize))
@@ -344,21 +581,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         assistantEnabledCheckbox.state = draft.assistantEnabled ? .on : .off
         assistantInsightsPopup.selectItem(at: Self.insightModes.firstIndex(of: draft.assistantInsights) ?? 1)
 
-        updateProviderVisibility()
         updateMcpUrl()
-        updateAvailability()
     }
 
     private func collectIntoDraft() {
-        let candidates = providers
-        let providerIndex = providerPopup.indexOfSelectedItem
-        if candidates.indices.contains(providerIndex) {
-            draft.provider = candidates[providerIndex].key
-        }
-        draft.appleModel = appleModelPopup.indexOfSelectedItem == 1 ? "pcc" : "on-device"
-        draft.model = modelCombo.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        draft.baseUrl = baseUrlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        apiKey = apiKeyField.stringValue
+        draft.commandProfile = commandEditor.commit()
+        draft.insightProfile = insightEditor.commit()
 
         let chosenFont = fontCombo.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         // An unresolvable family is stored as automatic rather than kept as a
@@ -395,32 +623,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         )
     }
 
-    private func updateProviderVisibility() {
-        let candidates = providers
-        let provider = candidates[min(max(0, providerPopup.indexOfSelectedItem), candidates.count - 1)].key
-        let isApple = provider == "apple"
-        let isOllama = provider == "ollama"
-
-        // Row order matches buildAITab().
-        aiGrid.row(at: 1).isHidden = !isApple            // Apple Model
-        aiGrid.row(at: 2).isHidden = !isApple            // Status
-        aiGrid.row(at: 3).isHidden = isApple || isOllama // API Key
-        aiGrid.row(at: 4).isHidden = isApple             // Model
-        aiGrid.row(at: 5).isHidden = !(provider == "openai" || isOllama) // Base URL
-
-        refreshModelsButton.isHidden = !isOllama
-        if isOllama { reloadOllamaModels() }
-    }
-
-    private func updateAvailability() {
-        switch AIService.appleAvailability() {
-        case .available:
-            availabilityLabel.stringValue = "Available on this Mac."
-            availabilityLabel.textColor = .systemGreen
-        case .unavailable(let reason):
-            availabilityLabel.stringValue = reason
-            availabilityLabel.textColor = .systemOrange
-        }
+    private func updateProfileVisibility() {
+        let showCommands = profileSwitcher.selectedSegment == 0
+        commandEditor.isHidden = !showCommands
+        insightEditor.isHidden = showCommands
     }
 
     private func updateMcpUrl() {
@@ -432,9 +638,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     // MARK: - Actions
 
-    @objc private func providerChanged() {
-        updateProviderVisibility()
-        updateAvailability()
+    @objc private func profileSwitched() {
+        updateProfileVisibility()
     }
 
     @objc private func mcpEnabledChanged() {
@@ -445,27 +650,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         fontSizeField.stringValue = String(Int(fontSizeStepper.doubleValue))
     }
 
-    @objc private func reloadOllamaModels() {
-        let baseUrl = baseUrlField.stringValue
-        let current = modelCombo.stringValue
-        refreshModelsButton.isEnabled = false
-
-        Task { @MainActor in
-            let models = await OllamaModels.list(baseUrl: baseUrl)
-            refreshModelsButton.isEnabled = true
-            modelCombo.removeAllItems()
-            modelCombo.addItems(withObjectValues: models)
-            // Keep whatever the user typed; only the suggestion list changed.
-            modelCombo.stringValue = current
-            modelCombo.placeholderString = models.isEmpty
-                ? "Ollama not reachable — start it to list models"
-                : "llama3"
-        }
-    }
-
     @objc private func save() {
         collectIntoDraft()
-        SettingsStore.shared.apiKey = apiKey
+        apiKeys.commit()
         SettingsStore.shared.save(draft)
         onSave?(draft)
         close()

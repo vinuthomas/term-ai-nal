@@ -52,7 +52,7 @@ final class AssistantController: NSObject, AssistantSidebarDelegate {
     }
 
     private func requestInsight(for record: CommandRecord) {
-        guard let provider = AIService.provider(for: SettingsStore.shared.settings) else { return }
+        guard let provider = AIService.provider(for: SettingsStore.shared.settings.insightProfile) else { return }
 
         let prompt = AIPrompts.insightPrompt(
             command: record.command,
@@ -111,7 +111,7 @@ final class AssistantController: NSObject, AssistantSidebarDelegate {
     // MARK: - Questions
 
     private func ask(_ question: String, context: String) {
-        guard let provider = AIService.provider(for: SettingsStore.shared.settings) else {
+        guard let provider = AIService.provider(for: SettingsStore.shared.settings.insightProfile) else {
             sidebar.appendError("No AI provider configured. Open Settings to pick one.")
             return
         }

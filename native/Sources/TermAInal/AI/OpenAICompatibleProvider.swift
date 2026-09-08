@@ -11,7 +11,7 @@ import Foundation
 /// their request and response shapes are different enough to need their own
 /// providers. `AIService.provider(for:)` returns nil for them.
 struct OpenAICompatibleProvider: AIProvider {
-    let settings: AppSettings
+    let settings: AIProfile
 
     private var flavor: Flavor {
         Flavor(rawValue: settings.provider) ?? .openai
@@ -250,7 +250,7 @@ struct OpenAICompatibleProvider: AIProvider {
 
         if flavor != .ollama {
             // Read the key only at request time; never store or log it.
-            let key = SettingsStore.shared.apiKey
+            let key = SettingsStore.shared.apiKey(for: settings.provider)
             guard !key.isEmpty else {
                 throw AIError.notConfigured("No API key configured for \(settings.provider)")
             }

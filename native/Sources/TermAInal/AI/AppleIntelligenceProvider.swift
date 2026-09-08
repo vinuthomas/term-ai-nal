@@ -48,7 +48,7 @@ struct GeneratedPlan {
 /// the `fm` CLI and scraped stdout. This talks to the FoundationModels framework
 /// directly, and uses guided generation so the response shape is guaranteed.
 struct AppleIntelligenceProvider: AIProvider {
-    let settings: AppSettings
+    let settings: AIProfile
 
     // MARK: - Availability
 

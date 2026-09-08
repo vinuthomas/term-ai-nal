@@ -30,18 +30,52 @@ struct MCPFeatures: Codable {
     }
 }
 
-/// Port of the `defaultSettings` object in `main.ts` — the single source of
-/// truth for every persisted setting key.
+/// One AI configuration. Two of these are held, so command generation and the
+/// assistant can use different models.
 ///
-/// `apiKey` is absent by design: it moves out of the settings file and into the
-/// keychain (see `KeychainStore`), replacing Electron's `safeStorage` hex blob.
-struct AppSettings: Codable {
+/// The split exists because the two tasks have genuinely different needs, and
+/// measurement bore that out: Apple's on-device 3B produced a wrong `ls` flag
+/// but a correct diagnosis of a failing command, while a coder-tuned local model
+/// was the reverse trade — accurate syntax at the cost of memory. Property names
+/// match what the providers already read, so provider bodies are unaffected.
+struct AIProfile: Codable, Equatable {
     var provider: String = "openai"
     var model: String = "gpt-4o"
     /// Ollama or any custom endpoint; empty means use the provider default.
     var baseUrl: String = ""
     /// `on-device` (local 3B) or `pcc` (Private Cloud Compute).
     var appleModel: String = "on-device"
+
+    init(provider: String = "openai", model: String = "gpt-4o", baseUrl: String = "", appleModel: String = "on-device") {
+        self.provider = provider
+        self.model = model
+        self.baseUrl = baseUrl
+        self.appleModel = appleModel
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let d = AIProfile()
+        provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? d.provider
+        model = try c.decodeIfPresent(String.self, forKey: .model) ?? d.model
+        baseUrl = try c.decodeIfPresent(String.self, forKey: .baseUrl) ?? d.baseUrl
+        appleModel = try c.decodeIfPresent(String.self, forKey: .appleModel) ?? d.appleModel
+    }
+}
+
+/// Port of the `defaultSettings` object in `main.ts` — the single source of
+/// truth for every persisted setting key.
+///
+/// `apiKey` is absent by design: it moves out of the settings file and into the
+/// keychain (see `KeychainStore`), replacing Electron's `safeStorage` hex blob.
+struct AppSettings: Codable {
+    /// Generating shell commands: the palette (Cmd+Shift+P) and the task
+    /// planner (Cmd+Shift+M). Accuracy of syntax matters most here.
+    var commandProfile: AIProfile = AIProfile()
+    /// The assistant sidebar's insights and questions. Explanation quality and
+    /// low cost matter more than command syntax.
+    var insightProfile: AIProfile = AIProfile()
+
     var fontSize: Double = 14
     /// Empty means auto-detect a Unicode-capable font stack.
     var fontFamily: String = ""
@@ -68,6 +102,11 @@ struct AppSettings: Codable {
     var mcpFileBufferEnabled: Bool = true
     var mcpFeatures: MCPFeatures = MCPFeatures()
 
+    /// Only for reading a pre-split settings file; never encoded.
+    private enum LegacyAIKeys: String, CodingKey {
+        case provider, model, baseUrl, appleModel
+    }
+
     static var defaults: AppSettings { AppSettings() }
 
     init() {}
@@ -79,10 +118,19 @@ struct AppSettings: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let d = AppSettings()
-        provider = try c.decodeIfPresent(String.self, forKey: .provider) ?? d.provider
-        model = try c.decodeIfPresent(String.self, forKey: .model) ?? d.model
-        baseUrl = try c.decodeIfPresent(String.self, forKey: .baseUrl) ?? d.baseUrl
-        appleModel = try c.decodeIfPresent(String.self, forKey: .appleModel) ?? d.appleModel
+        // A file from before the split carries flat provider keys. Both roles
+        // inherit them, so an upgrade changes nothing until the user chooses to
+        // differ — surprising someone by silently moving one role to another
+        // model would be worse than leaving them identical.
+        let legacy = try? decoder.container(keyedBy: LegacyAIKeys.self)
+        let inherited = AIProfile(
+            provider: (try? legacy?.decodeIfPresent(String.self, forKey: .provider)) as? String ?? d.commandProfile.provider,
+            model: (try? legacy?.decodeIfPresent(String.self, forKey: .model)) as? String ?? d.commandProfile.model,
+            baseUrl: (try? legacy?.decodeIfPresent(String.self, forKey: .baseUrl)) as? String ?? d.commandProfile.baseUrl,
+            appleModel: (try? legacy?.decodeIfPresent(String.self, forKey: .appleModel)) as? String ?? d.commandProfile.appleModel
+        )
+        commandProfile = try c.decodeIfPresent(AIProfile.self, forKey: .commandProfile) ?? inherited
+        insightProfile = try c.decodeIfPresent(AIProfile.self, forKey: .insightProfile) ?? inherited
         fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? d.fontSize
         fontFamily = try c.decodeIfPresent(String.self, forKey: .fontFamily) ?? d.fontFamily
         theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? d.theme
@@ -177,9 +225,21 @@ final class SettingsStore {
         }
     }
 
-    /// Lives in the keychain, not `settings.json`.
-    var apiKey: String {
-        get { KeychainStore.get(account: "apiKey") ?? "" }
-        set { KeychainStore.set(newValue, account: "apiKey") }
+    /// API keys live in the keychain, keyed by *provider* rather than by role.
+    ///
+    /// A key belongs to a service, not to a task: with two profiles that may
+    /// both point at OpenAI, storing per-role would mean entering the same key
+    /// twice and having them drift.
+    func apiKey(for provider: String) -> String {
+        if let key = KeychainStore.get(account: "apiKey.\(provider)"), !key.isEmpty {
+            return key
+        }
+        // Pre-split builds stored a single unqualified key. Read it through so
+        // an upgrade does not appear to lose it.
+        return KeychainStore.get(account: "apiKey") ?? ""
+    }
+
+    func setApiKey(_ key: String, for provider: String) {
+        KeychainStore.set(key, account: "apiKey.\(provider)")
     }
 }

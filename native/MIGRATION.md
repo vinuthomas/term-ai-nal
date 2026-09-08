@@ -324,6 +324,52 @@ Explanation and summarisation are what a 3B model is suited to, which is the
 concrete argument for tiering by task rather than picking one provider — still
 to build.
 
+### Two AI profiles
+
+`AppSettings` holds **two** `AIProfile` values rather than one flat provider
+configuration:
+
+| profile | used by | what matters |
+|---|---|---|
+| `commandProfile` | palette (Cmd+Shift+P), task planner (Cmd+Shift+M) | correct shell syntax |
+| `insightProfile` | assistant sidebar insights and questions | explanation quality, low cost |
+
+The split is measured, not speculative. On the same failing `ls`, Apple's
+on-device 3B gave a correct diagnosis; on command generation the same model
+produced `ls -l | sort -rn | tail -n 1`, which sorts by link count and returns
+the *smallest* file. `qwen3:4b` was the reverse trade — accurate syntax, ~2.6 GB
+resident. Neither is the right answer for both jobs, so the app stops pretending
+one provider serves both.
+
+Migration: a settings file written before the split carries flat `provider` /
+`model` / `baseUrl` / `appleModel` keys, and **both** profiles inherit them.
+An upgrade therefore changes nothing until the user chooses to differ —
+silently moving one role to a different model would be worse than leaving them
+identical.
+
+API keys moved from a single keychain entry to one per provider
+(`apiKey.<provider>`), read through `SettingsStore.apiKey(for:)`. A key belongs
+to a service, not a role: two profiles both pointing at OpenAI share one key
+rather than needing it entered twice and drifting. The old unqualified entry is
+still read as a fallback so an upgrade does not appear to lose it.
+
+`--check-ai` exercises both roles and reports which failed, since a working
+command profile says nothing about the assistant's.
+
+The settings UI builds one reusable `AIProfileEditor` and instantiates it twice
+behind a segmented control. That extraction matters for more than tidiness: the
+same bug had already appeared twice in this file — a control whose stored value
+matches no item stays on index 0, and Save then persists that as the user's
+choice. It cost an automatic font (silently replaced with Andale Mono) and would
+have rewritten an `anthropic` config to Apple. Duplicating the control set would
+have invited a third instance. The editor is now immune by construction: every
+popup item carries its key in `representedObject`, selection is by key, an
+unrecognised stored value is *appended* as `"<name> (not ported)"` and selected,
+and read-back goes through `selectedItem?.representedObject` rather than an
+index into a parallel array. Applying that uniformly also caught a third case
+nobody had noticed — the Apple-model popup did `index == 1 ? "pcc" :
+"on-device"`, so any other stored value was silently rewritten.
+
 ### Phase 2 — Close the honest gaps
 
 Small, mechanical, and each one is a thing an existing user would notice missing.

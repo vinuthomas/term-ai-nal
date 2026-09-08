@@ -81,12 +81,12 @@ enum AIError: LocalizedError {
 /// Provider dispatch — the Swift counterpart of the single `if/else` chain in
 /// `callAIRaw` in `main.ts`.
 enum AIService {
-    static func provider(for settings: AppSettings) -> AIProvider? {
-        switch settings.provider {
+    static func provider(for profile: AIProfile) -> AIProvider? {
+        switch profile.provider {
         case "apple":
-            return AppleIntelligenceProvider(settings: settings)
+            return AppleIntelligenceProvider(settings: profile)
         case "openai", "perplexity", "ollama":
-            return OpenAICompatibleProvider(settings: settings)
+            return OpenAICompatibleProvider(settings: profile)
         case "anthropic", "gemini":
             // TODO: port the `anthropic` and `gemini` branches of `callAIRaw`.
             // Both use a bespoke request/response shape, so they do not fit

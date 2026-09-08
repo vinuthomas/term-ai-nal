@@ -136,7 +136,7 @@ final class AIPaletteController: NSObject {
         let request = input.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !request.isEmpty else { return }
 
-        guard let provider = AIService.provider(for: SettingsStore.shared.settings) else {
+        guard let provider = AIService.provider(for: SettingsStore.shared.settings.commandProfile) else {
             showError("No AI provider configured. Set `provider` in settings.json.")
             return
         }
