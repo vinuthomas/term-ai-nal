@@ -238,14 +238,20 @@ final class TerminalPaneView: LocalProcessTerminalView {
         needsDisplay = true
     }
 
-    /// Pastes a clipboard image as an inline image, returning false when the
+    /// Pastes a clipboard image as a temp-file path, returning false when the
     /// clipboard holds no image.
     ///
-    /// Port of `pasteImageToTerminal`, which used xterm.js's image addon. Here
-    /// the iTerm2 OSC 1337 `File=` sequence is fed straight to the emulator,
-    /// which SwiftTerm renders natively. It deliberately does not go to the
-    /// PTY: this is a display action, and the shell has no idea an image
-    /// arrived — the same tradeoff the Electron build made.
+    /// Writes the image to a PNG in `TMPDIR` and sends its shell-quoted path
+    /// through the PTY as ordinary (bracketed) input — the same mechanism a
+    /// dragged file uses, and how iTerm2/Ghostty handle a pasted image. This
+    /// previously fed an iTerm2 OSC 1337 `File=` sequence straight into the
+    /// local display instead, which never reached the foreground program at
+    /// all: at a bare shell prompt that's merely inert, but inside a
+    /// full-screen TUI (Claude Code's CLI, `vim`, …) the program never learns
+    /// a paste happened and never redraws that region, so the raw image just
+    /// sits drawn on top of whatever the TUI already had on screen. A path is
+    /// ordinary text input, so it reaches either kind of program the same way
+    /// a typed string would.
     func pasteImageFromClipboard() -> Bool {
         let pasteboard = NSPasteboard.general
         guard pasteboard.canReadObject(forClasses: [NSImage.self], options: nil),
@@ -257,8 +263,20 @@ final class TerminalPaneView: LocalProcessTerminalView {
             return false
         }
 
-        let payload = png.base64EncodedString()
-        feed(text: "\u{1b}]1337;File=inline=1;preserveAspectRatio=1;size=\(png.count):\(payload)\u{07}\r\n")
+        let url = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("term-ai-nal-paste-\(UUID().uuidString.prefix(8)).png")
+        guard (try? png.write(to: url)) != nil else {
+            return false
+        }
+
+        let quotedPath = "'" + url.path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        if terminal.bracketedPasteMode {
+            process.send(data: EscapeSequences.bracketedPasteStart[0...])
+            sendToShell(quotedPath)
+            process.send(data: EscapeSequences.bracketedPasteEnd[0...])
+        } else {
+            sendToShell(quotedPath)
+        }
         return true
     }
 

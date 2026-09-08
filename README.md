@@ -87,7 +87,7 @@ python3 Scripts/mock-ai-api.py &
 ```
 
 Not covered by any of these, and unverified at runtime: any cloud provider
-against its real API (no keys have been used), and image paste rendering.
+against its real API (no keys have been used).
 
 ## Features
 

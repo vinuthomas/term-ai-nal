@@ -284,8 +284,11 @@ Do not assume these work; `docs/MIGRATION.md` is the authoritative list.
   prefill, and the deprecated top-level `output_format`.
 - **Private Cloud Compute**: `appleModel: "pcc"` is accepted but served on-device. The SDK
   exposes no way to request PCC; the TODO deliberately does not fake it.
-- **Image paste** is implemented (clipboard image → PNG → iTerm2 OSC 1337 `File=`, falling
-  back to a text paste) but has never been visually confirmed.
+- **Image paste** writes the clipboard image to a PNG in `TMPDIR` and sends its shell-quoted
+  path through the PTY as ordinary (bracketed) input, same as a dragged file. It used to feed
+  an iTerm2 OSC 1337 `File=` sequence straight into the local display instead — visually
+  confirmed broken inside a full-screen TUI (Claude Code's CLI): the program never received
+  the bytes so never redrew, and the raw image just sat drawn on top of its screen.
 - **Pane labels** — `PaneNode.label` is plumbed through to MCP but nothing sets it.
 - **MCP hidden panes** — hiding is expressed only by omitting a pane from `panesProvider`;
   the distinct 403 "not visible to MCP" response collapsed into a 404.
