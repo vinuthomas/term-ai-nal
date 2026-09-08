@@ -166,6 +166,29 @@ Ordered roughly by how much they'd be missed.
   instance when the settings UI lands.
 - **Font settings.** `fontSize`/`fontFamily` are parsed but not applied.
 
+## Porting traps hit so far
+
+Two regressions that only showed up in real use, both from trusting a library
+default over what the Electron build actually did:
+
+1. **A minimal child environment.** `Terminal.getEnvironmentVariables` returns
+   only TERM, COLORTERM, LANG and a few of USER/HOME/LOGNAME — PATH is
+   explicitly excluded. The Electron build spawned with `{...process.env}`, and
+   iTerm2 and Terminal.app inherit too. With `SHELL` absent, zsh startup scripts
+   took a bash code path and emitted `(eval):type: bad option: -t`, which then
+   tripped Powerlevel10k's instant-prompt warning on every launch. The child now
+   inherits the full environment, with TERM/COLORTERM/SHELL set explicitly and
+   LANG only as a fallback. Went from 6 variables to 60.
+2. **Dropping the font fallback stack.** `DEFAULT_FONT_FAMILY` in
+   `TerminalPane.tsx` listed Nerd Font variants first, and it existed precisely
+   for glyph coverage. Falling back to `NSFont.monospacedSystemFont` instead
+   rendered Powerlevel10k's private-use-area icons as replacement boxes.
+   `resolveFont` restores the original preference order.
+
+Both were invisible to the headless checks and to `swift build` — the lesson is
+that a "port of X" comment is worth little unless the *reason* X looked odd is
+carried across with it.
+
 ## Known constraints
 
 - **Xcode is now required to build.** The `FoundationModelsMacros` plugin ships

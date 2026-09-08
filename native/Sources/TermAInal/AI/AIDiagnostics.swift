@@ -30,6 +30,13 @@ enum AIDiagnostics {
         let settingsController = SettingsWindowController()
         print("settings UI: constructs ok (\(settingsController.window?.contentView != nil ? "content view present" : "NO CONTENT VIEW"))")
 
+        let resolved = TerminalPaneView.resolveFont(
+            family: settings.fontFamily,
+            size: CGFloat(settings.fontSize)
+        )
+        print("font       : \(resolved.fontName) @ \(Int(settings.fontSize))pt"
+            + (settings.fontFamily.isEmpty ? " (auto)" : " (configured)"))
+
         let semaphore = DispatchSemaphore(value: 0)
         var exitCode: Int32 = 0
 

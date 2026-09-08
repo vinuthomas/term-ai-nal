@@ -44,14 +44,72 @@ final class TerminalPaneView: LocalProcessTerminalView {
     /// Starts the login shell. Matches the Electron spawn: `zsh --login` with a
     /// 256-colour, truecolor-capable environment.
     func start(cwd: String?) {
-        var environment = Terminal.getEnvironmentVariables(termName: "xterm-256color")
-        environment.append("COLORTERM=truecolor")
         startProcess(
             executable: Self.loginShell,
             args: ["--login"],
-            environment: environment,
+            environment: Self.childEnvironment(),
             currentDirectory: cwd ?? FileManager.default.homeDirectoryForCurrentUser.path
         )
+    }
+
+    /// Preference order copied from `DEFAULT_FONT_FAMILY` in `TerminalPane.tsx`.
+    ///
+    /// Nerd Font variants come first because prompts like Powerlevel10k draw
+    /// their separators and icons from the Unicode private use area. The system
+    /// monospaced font contains none of them, so falling straight back to it
+    /// renders those glyphs as replacement boxes — which is exactly what
+    /// dropping this stack during the port caused.
+    private static let fontFallbacks = [
+        // Nerd Font variants — best Unicode plus icon coverage.
+        "MesloLGS NF", "Hack Nerd Font Mono", "FiraCode Nerd Font Mono",
+        "JetBrainsMono Nerd Font Mono", "CaskaydiaCove Nerd Font Mono",
+        "SauceCodePro Nerd Font Mono",
+        // Cross-platform developer fonts.
+        "Fira Code", "JetBrains Mono", "Cascadia Code", "Cascadia Mono",
+        // macOS system fonts.
+        "Menlo", "Monaco", "SF Mono",
+    ]
+
+    /// Resolves an explicit family, else the first installed fallback, else the
+    /// system monospaced font. `NSFont(name:)` accepts family names, returning
+    /// the regular face.
+    static func resolveFont(family: String, size: CGFloat) -> NSFont {
+        let requested = family.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !requested.isEmpty, let font = NSFont(name: requested, size: size) {
+            return font
+        }
+        for candidate in fontFallbacks {
+            if let font = NSFont(name: candidate, size: size) {
+                return font
+            }
+        }
+        return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    /// The child shell inherits the app's full environment.
+    ///
+    /// `Terminal.getEnvironmentVariables` deliberately returns a minimal set —
+    /// TERM, COLORTERM, LANG and a few of USER/HOME/LOGNAME, with PATH
+    /// explicitly excluded — which is not what a terminal emulator should hand
+    /// its shell. The Electron build spawned with `{...process.env}`, and iTerm2
+    /// and Terminal.app inherit likewise; anything less makes the user's shell
+    /// startup behave differently here than everywhere else.
+    ///
+    /// Concretely, a missing `SHELL` made zsh startup scripts take a bash code
+    /// path and emit `(eval):type: bad option: -t`, which then tripped
+    /// Powerlevel10k's instant-prompt console-output warning. `SHELL` is set
+    /// explicitly because a GUI launch via launchd may not provide one.
+    static func childEnvironment() -> [String] {
+        var environment = ProcessInfo.processInfo.environment
+        environment["TERM"] = "xterm-256color"
+        environment["COLORTERM"] = "truecolor"
+        environment["SHELL"] = loginShell
+        // Only a fallback: an inherited locale is the user's own choice, but
+        // without any locale tools like vi emit non-UTF-8 sequences.
+        if environment["LANG"] == nil, environment["LC_ALL"] == nil {
+            environment["LANG"] = "en_US.UTF-8"
+        }
+        return environment.map { "\($0.key)=\($0.value)" }
     }
 
     static var loginShell: String {
@@ -83,12 +141,7 @@ final class TerminalPaneView: LocalProcessTerminalView {
     /// `fontFamily` options passed to the `Terminal` constructor in
     /// `TerminalPane.tsx`.
     func applyAppearance(theme: TerminalTheme, fontFamily: String, fontSize: Double) {
-        let size = CGFloat(fontSize)
-        // An unset or unresolvable family must not be fatal: the Electron build's
-        // DEFAULT_FONT_FAMILY stack existed for Unicode coverage, and the system
-        // mono font is the native equivalent.
-        font = NSFont(name: fontFamily, size: size)
-            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        font = Self.resolveFont(family: fontFamily, size: CGFloat(fontSize))
 
         installColors(theme.ansi.map { color in
             let (r, g, b) = color.rgb8
