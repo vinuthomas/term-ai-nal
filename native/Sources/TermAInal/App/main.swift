@@ -36,7 +36,7 @@ if CommandLine.arguments.contains("--check-contrast") {
     exit(allPass ? 0 : 1)
 }
 
-// `--check-titlebar` verifies the palette accessory gets a real width.
+// `--check-titlebar` verifies the titlebar accessory gets a real width.
 // NSTitlebarAccessoryViewController sizes its view from the frame and ignores
 // Auto Layout's fittingSize, so a constraint-only container silently stayed
 // 0pt wide and the button rendered invisibly.
@@ -56,7 +56,7 @@ if CommandLine.arguments.contains("--check-titlebar") {
     window.contentView = NSView()
 
     // The shipped factory, not a copy of it.
-    let accessory = AppDelegate.makePaletteAccessory(
+    let accessory = AppDelegate.makeSidebarToggleAccessory(
         target: application,
         action: #selector(NSApplication.terminate(_:))
     )
@@ -70,8 +70,12 @@ if CommandLine.arguments.contains("--check-titlebar") {
     print("accessories : \(window.titlebarAccessoryViewControllers.count)")
     print("container   : \(container.frame)")
     print("button      : \(button?.frame.debugDescription ?? "nil")")
-    let ok = container.frame.width > 40 && (button?.frame.width ?? 0) > 40
-    print(ok ? "\nbutton has a real width" : "\nZERO WIDTH — still invisible")
+    // The bug was a *zero* width, not a narrow one, so assert the invariant
+    // rather than a magic number: the control has real width and the container
+    // is wide enough to hold it.
+    let buttonWidth = button?.frame.width ?? 0
+    let ok = buttonWidth >= 20 && container.frame.width >= buttonWidth
+    print(ok ? "\naccessory has a real width" : "\nZERO WIDTH — invisible")
     exit(ok ? 0 : 1)
 }
 

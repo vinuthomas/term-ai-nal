@@ -16,6 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// Held while the sheet is up; released when it closes.
     private var palette: AIPaletteController?
     private var settingsController: SettingsWindowController?
+    /// Kept so its pressed state can follow the sidebar.
+    private var sidebarToggle: NSButton?
 
     private let assistant = AssistantController()
     private let mainSplit = NSSplitView()
@@ -125,7 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ])
         window.contentView = content
         window.delegate = self
-        installPaletteButton()
+        installSidebarToggle()
         window.center()
         window.makeKeyAndOrderFront(nil)
 
@@ -134,44 +136,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
     }
 
-    /// Puts a permanent Command Palette button in the titlebar.
+    /// Puts a permanent assistant toggle in the titlebar.
     ///
-    /// Deliberately the titlebar and not the tab bar: the tab bar hides itself
-    /// when there is only one tab, which is most of the time, so a button there
-    /// would vanish exactly when someone is looking for it. A menu item and a
-    /// shortcut are not discoverability — you have to already know the feature
-    /// exists to find either.
-    private func installPaletteButton() {
-        window.addTitlebarAccessoryViewController(
-            Self.makePaletteAccessory(target: self, action: #selector(openAIPalette))
+    /// The sidebar could be closed from its own header but only reopened from
+    /// the menu or a shortcut, which is not a way back — you have to already
+    /// know the feature exists to find either. The titlebar rather than the tab
+    /// bar because the tab bar hides itself at one tab, which is most of the
+    /// time, so a control there would vanish exactly when it was wanted.
+    private func installSidebarToggle() {
+        let accessory = Self.makeSidebarToggleAccessory(
+            target: self,
+            action: #selector(toggleAssistant)
         )
+        sidebarToggle = accessory.view.subviews.first as? NSButton
+        window.addTitlebarAccessoryViewController(accessory)
     }
 
     /// Builds the titlebar accessory.
     ///
     /// The container is given an explicit frame. `NSTitlebarAccessoryViewController`
     /// sizes its view from the frame and ignores Auto Layout's `fittingSize`, so
-    /// with constraints alone the container stayed 0pt wide and the button was
-    /// laid out at zero width — present in the view hierarchy and invisible.
-    static func makePaletteAccessory(target: AnyObject, action: Selector) -> NSTitlebarAccessoryViewController {
-        let button = NSButton(title: "Command Palette", target: target, action: action)
+    /// with constraints alone the container stayed 0pt wide and the control was
+    /// laid out at zero width — present in the hierarchy and invisible.
+    static func makeSidebarToggleAccessory(target: AnyObject, action: Selector) -> NSTitlebarAccessoryViewController {
+        let button = NSButton(title: "", target: target, action: action)
         button.bezelStyle = .accessoryBarAction
+        button.setButtonType(.pushOnPushOff)
         button.controlSize = .small
-        button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
-        button.imagePosition = .imageLeading
-        button.toolTip = "Describe what you want to do (\u{2318}\u{21E7}P)"
+        button.image = NSImage(systemSymbolName: "sidebar.right", accessibilityDescription: "Assistant")
+        button.imagePosition = .imageOnly
+        button.toolTip = "Show or hide the assistant (\u{2318}\u{21E7}A)"
 
         let height: CGFloat = 28
         let trailingInset: CGFloat = 10
-        let size = button.intrinsicContentSize
+        let width = max(button.intrinsicContentSize.width, 34)
         button.frame = NSRect(
             x: 0,
-            y: ((height - size.height) / 2).rounded(),
-            width: size.width,
-            height: size.height
+            y: ((height - button.intrinsicContentSize.height) / 2).rounded(),
+            width: width,
+            height: button.intrinsicContentSize.height
         )
 
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: size.width + trailingInset, height: height))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: width + trailingInset, height: height))
         container.addSubview(button)
 
         let accessory = NSTitlebarAccessoryViewController()
@@ -180,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         return accessory
     }
 
-    // MARK: - Assistant sidebar
+    // MARK: - Assistant sidebar    // MARK: - Assistant sidebar
 
     private var sidebarVisible: Bool { !assistant.sidebar.isHidden }
 
@@ -200,6 +206,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             assistant.sidebar.isHidden = true
         }
         mainSplit.adjustSubviews()
+        sidebarToggle?.state = sidebarVisible ? .on : .off
     }
 
     @objc private func toggleAssistant() {
