@@ -15,8 +15,8 @@ enum AIDiagnostics {
 
         print("settings   : \(SettingsStore.shared.settingsURL.path)")
         switch AIService.appleAvailability() {
-        case .available:
-            print("apple      : available")
+        case .available(let caveat):
+            print("apple      : available" + (caveat.map { " — caveat: \($0)" } ?? ""))
         case .unavailable(let reason):
             print("apple      : unavailable — \(reason)")
         }

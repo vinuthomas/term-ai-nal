@@ -58,7 +58,11 @@ enum ReplyCleaner {
 }
 
 enum AppleIntelligenceAvailability {
-    case available
+    /// Usable. `caveat` carries a non-fatal warning — an unsupported region
+    /// still answers plainly worded questions, but rejects prompts it cannot
+    /// identify a supported language in, so it is worth saying up front rather
+    /// than letting the user discover it as a failed request.
+    case available(caveat: String?)
     case unavailable(reason: String)
 }
 

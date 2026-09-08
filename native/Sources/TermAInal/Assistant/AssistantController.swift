@@ -138,17 +138,61 @@ final class AssistantController: NSObject, AssistantSidebarDelegate {
             let status = record.exitCode.map { "exit \($0)" } ?? "still running"
             return """
             $ \(record.command)   [\(status)]
-            \(Self.truncateForContext(record.output, limit: 1500))
+            \(Self.truncateForContext(record.output, limit: 400))
             """
         }
         return "Recent terminal activity:\n\n" + described.joined(separator: "\n\n")
     }
 
-    /// Keeps the tail rather than the head: diagnostics and error messages land
-    /// at the end of output, and the on-device model's context is small.
-    static func truncateForContext(_ text: String, limit: Int = 4000) -> String {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.count > limit else { return trimmed }
-        return "…(truncated)…\n" + String(trimmed.suffix(limit))
+    /// Reduces terminal output to something a language model can actually read.
+    ///
+    /// Two measured reasons this matters, both specific to the on-device model.
+    /// Its context window is **4096** tokens, and glyph-heavy terminal output
+    /// costs roughly one token per character — 1000 characters of a
+    /// Powerlevel10k prompt measured at 888 tokens — so a few thousand
+    /// characters of raw scrollback fills the window on its own. And because
+    /// the framework has to identify a supported language in the prompt when
+    /// the user's own locale is unsupported (`en_IN` is not in the supported
+    /// set), a prompt dominated by paths and private-use glyphs can fail that
+    /// identification outright and be rejected as an unsupported language.
+    ///
+    /// Stripping the decoration fixes both at once: fewer tokens, and what
+    /// remains is recognisably English.
+    static func truncateForContext(_ text: String, limit: Int = 1500) -> String {
+        let cleaned = text
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map(stripDecoration)
+            .filter { !$0.isEmpty && !isMostlySymbols($0) }
+            .joined(separator: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        guard cleaned.count > limit else { return cleaned }
+        // Keep the tail: diagnostics and error messages land at the end.
+        return "…(earlier output omitted)…\n" + String(cleaned.suffix(limit))
+    }
+
+    /// Drops private-use glyphs (Nerd Font icons), box drawing and block
+    /// elements, and collapses the whitespace they leave behind.
+    private static func stripDecoration(_ line: some StringProtocol) -> String {
+        let kept = line.unicodeScalars.filter { scalar in
+            switch scalar.value {
+            case 0xE000...0xF8FF: return false       // private use area
+            case 0xF0000...0xFFFFD, 0x100000...0x10FFFD: return false // supplementary PUA
+            case 0x2500...0x259F: return false       // box drawing, block elements
+            case 0x2800...0x28FF: return false       // braille (spinners)
+            case 0x276C...0x2771: return false       // prompt chevrons
+            default: return !scalar.properties.isDefaultIgnorableCodePoint
+            }
+        }
+        return String(String.UnicodeScalarView(kept))
+            .replacingOccurrences(of: "\\s{2,}", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    /// A line that is mostly punctuation carries no meaning for the model and
+    /// costs tokens — a bare `%`, a rule of dashes, a progress bar.
+    private static func isMostlySymbols(_ line: String) -> Bool {
+        let letters = line.unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }.count
+        return letters * 2 < line.unicodeScalars.count
     }
 }

@@ -79,6 +79,11 @@ if CommandLine.arguments.contains("--check-titlebar") {
     exit(ok ? 0 : 1)
 }
 
+if CommandLine.arguments.contains("--check-locale") {
+    _ = NSApplication.shared
+    LocaleDiagnostics.runAndExit()
+}
+
 // SPM builds a bare executable, so the NSApplication lifecycle is set up by
 // hand rather than via @NSApplicationMain.
 let app = NSApplication.shared

@@ -227,9 +227,9 @@ private final class AIProfileEditor: NSView {
 
     private func updateAvailability() {
         switch AIService.appleAvailability() {
-        case .available:
-            availabilityLabel.stringValue = "Available on this Mac."
-            availabilityLabel.textColor = .systemGreen
+        case .available(let caveat):
+            availabilityLabel.stringValue = caveat ?? "Available on this Mac."
+            availabilityLabel.textColor = caveat == nil ? .systemGreen : .systemOrange
         case .unavailable(let reason):
             availabilityLabel.stringValue = reason
             availabilityLabel.textColor = .systemOrange

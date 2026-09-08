@@ -55,11 +55,49 @@ struct AppleIntelligenceProvider: AIProvider {
     static func availability() -> AppleIntelligenceAvailability {
         switch SystemLanguageModel.default.availability {
         case .available:
-            return .available
+            let model = SystemLanguageModel.default
+            guard model.supportsLocale() else {
+                let supported = model.supportedLanguages
+                    .map(\.minimalIdentifier).sorted().prefix(6).joined(separator: ", ")
+                return .available(caveat: "Your region (\(Locale.current.identifier)) is not in Apple Intelligence's supported set (\(supported), …). Plainly worded questions work; anything it cannot identify a language in is rejected.")
+            }
+            return .available(caveat: nil)
         case .unavailable(let reason):
             return .unavailable(reason: describe(reason))
         @unknown default:
             return .unavailable(reason: "Apple Intelligence is unavailable for an unknown reason")
+        }
+    }
+
+    /// Turns a generation failure into advice.
+    ///
+    /// The framework's own text for these is not actionable — an
+    /// `unsupportedLanguageOrLocale` surfaces as "An unsupported language or
+    /// locale was used", which tells the user nothing about their region being
+    /// outside Apple Intelligence's supported set or what to do instead.
+    static func advice(for error: Error) -> String {
+        guard let generation = error as? LanguageModelSession.GenerationError else {
+            return error.localizedDescription
+        }
+        switch generation {
+        case .unsupportedLanguageOrLocale:
+            let current = Locale.current.identifier
+            let supported = SystemLanguageModel.default.supportsLocale()
+            return supported
+                ? "Apple Intelligence could not identify a supported language in that request. Try rephrasing it."
+                : "Apple Intelligence does not support your region (\(current)). It can still answer plainly worded questions, but not reliably. Switch the Assistant profile to another provider in Settings, or set your Mac's language to a supported one."
+        case .exceededContextWindowSize:
+            return "That request was too long for the on-device model's \(SystemLanguageModel().contextSize)-token window. Ask about less at once."
+        case .guardrailViolation:
+            return "Apple Intelligence declined that request."
+        case .assetsUnavailable:
+            return "The Apple Intelligence model is not downloaded yet."
+        case .rateLimited:
+            return "Apple Intelligence is rate limiting requests. Try again shortly."
+        case .refusal:
+            return "Apple Intelligence declined to answer that."
+        default:
+            return generation.localizedDescription
         }
     }
 
@@ -113,13 +151,17 @@ struct AppleIntelligenceProvider: AIProvider {
     func answer(question: String, context: String) async throws -> String {
         try requireAvailable()
         let session = LanguageModelSession(instructions: AIPrompts.assistantPreamble())
-        // Schema-constrained like the other two entry points: it keeps the reply
-        // to the field and leaves no room for narration around it.
-        let response = try await session.respond(
-            to: context.isEmpty ? question : "\(context)\n\n\(question)",
-            generating: GeneratedAnswer.self
-        )
-        return ReplyCleaner.clean(response.content.answer)
+        do {
+            // Schema-constrained like the other two entry points: it keeps the
+            // reply to the field and leaves no room for narration around it.
+            let response = try await session.respond(
+                to: context.isEmpty ? question : "\(context)\n\n\(question)",
+                generating: GeneratedAnswer.self
+            )
+            return ReplyCleaner.clean(response.content.answer)
+        } catch {
+            throw AIError.unavailable(Self.advice(for: error))
+        }
     }
 
     func plan(goal: String, cwd: String) async throws -> [PlanStep] {
