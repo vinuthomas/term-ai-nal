@@ -148,12 +148,12 @@ Ordered roughly by how much they'd be missed.
 
 ## Known constraints
 
-- **`@Generable` needs Xcode.** The `FoundationModelsMacros` plugin ships with
-  Xcode, not Command Line Tools, so the macro cannot expand under a CLT-only
-  toolchain. The schemas are built at runtime with `DynamicGenerationSchema`
-  instead — same guarantee, more verbose. **Xcode is being installed**, so this
-  constraint is temporary: fold `AppleSchemas` into `@Generable` structs once
-  `xcode-select -p` points at Xcode. Keep the build working from the CLI.
+- **Xcode is now required to build.** The `FoundationModelsMacros` plugin ships
+  with Xcode rather than the Command Line Tools, and the Apple provider uses
+  `@Generable`. `swift build` still works from the CLI, but only with
+  `xcode-select -p` pointing at `/Applications/Xcode.app`. The removed
+  `DynamicGenerationSchema` construction is in git history if a CLT-only build
+  ever has to come back.
 - **Swift 5 language mode.** The target pins `swiftLanguageMode(.v5)`; the
   scaffold has not been audited for Swift 6 strict concurrency. `PaneController`
   and `AppDelegate` are main-actor by convention, not by annotation.
@@ -291,6 +291,35 @@ than a nicer Electron app. Everything here is new capability, not a port.
 3. **Providers: Ollama stays.** Anthropic and Gemini remain unported and
    undecided.
 4. **iTerm theme import: dropped.** Built-in themes only.
+
+### Local model guidance (Ollama)
+
+Measured on this machine, same two prompts via `--check-ai`:
+
+| model | resident | result |
+|---|---|---|
+| `qwen2.5-coder:14b` | ~9 GB | `ls -lhS` — correct, but heavy enough to slow the system |
+| `qwen3:4b` | ~2.6 GB | `ls -lhS` — correct, 3.7s warm. **Best balance** |
+| `erwan2/DeepSeek-R1-Distill-Qwen-1.5B` | ~1 GB | `ls -d`, `git revlist -a`, a bare `/my-repo` — unusable |
+
+Two things this surfaced, both now fixed in `OpenAICompatibleProvider`:
+
+- **URLSession's 60s default was too short.** A cold local model can spend most
+  of a minute loading before emitting a token; qwen3:4b timed out at 61.5s cold
+  and answered in 3.7s warm. Ollama now gets 300s, cloud providers 90s.
+- **Reasoning models are a poor fit** for command generation — they spend the
+  budget thinking. `think: false` is sent to Ollama (harmless on models without
+  a thinking mode) but does not reliably suppress it: qwen3 still emits its
+  trace into `content`. Prefer a non-reasoning, coder-tuned model.
+
+The distilled DeepSeek is a reasoning model *and* small enough to be wrong
+about flags, which is the worst combination for this task. If RAM is the
+constraint, `qwen3:4b` is the pick; `qwen2.5-coder:7b` (~4.7 GB, not installed)
+would be the coder-tuned middle ground.
+
+Better still, once Apple Intelligence is enabled: the on-device model costs no
+resident RAM of its own and needs no model load, which is precisely the problem
+a 14b local model creates.
 
 ### Suggested order
 

@@ -1,78 +1,39 @@
 import Foundation
 import FoundationModels
 
-// MARK: - Guided generation schemas
+// MARK: - Generated shapes
 //
 // These replace the parsing layer in `main.ts`. There, `callAI` demanded the
 // exact text `COMMAND: ...\nEXPLANATION: ...` and the renderer split the string,
 // while `callAIPlan` demanded a bare JSON array validated with `JSON.parse` —
 // both of which broke whenever the model added a code fence or a stray
-// sentence. A schema constrains decoding itself, so there is nothing left to
-// parse and nothing left to validate.
-//
-// The `@Generable` macro would express this more tersely, but its macro plugin
-// (`FoundationModelsMacros`) ships only with Xcode, not with the Command Line
-// Tools this package builds against. `DynamicGenerationSchema` gives the same
-// guarantee while staying buildable from the CLI — see MIGRATION.md.
+// sentence. Guided generation constrains decoding itself, so there is nothing
+// left to parse and nothing left to validate.
 
-enum AppleSchemas {
-    /// Mirrors the two fields `callAI` asked for in prose.
-    static func command() throws -> GenerationSchema {
-        let root = DynamicGenerationSchema(
-            name: "ShellCommand",
-            description: "A single executable shell command answering the user's request",
-            properties: [
-                .init(
-                    name: "command",
-                    description: "The raw executable shell command. No markdown, no backticks, no placeholders like <path>.",
-                    schema: DynamicGenerationSchema(type: String.self)
-                ),
-                .init(
-                    name: "explanation",
-                    description: "A concise explanation of the command, at most 10 words.",
-                    schema: DynamicGenerationSchema(type: String.self)
-                ),
-            ]
-        )
-        return try GenerationSchema(root: root, dependencies: [])
-    }
+@Generable(description: "A single executable shell command answering the user's request")
+struct GeneratedCommand {
+    @Guide(description: "The raw executable shell command. No markdown, no backticks, no placeholders like <path>.")
+    var command: String
 
-    /// The 10-step cap was prompt-only guidance in `callAIPlan`; here it is a
-    /// schema constraint the decoder enforces.
-    static func plan(maxSteps: Int) throws -> GenerationSchema {
-        let step = DynamicGenerationSchema(
-            name: "PlanStep",
-            description: "One step of an ordered shell command plan",
-            properties: [
-                .init(
-                    name: "cmd",
-                    description: "The raw shell command for this step. No markdown, no placeholders like <path>.",
-                    schema: DynamicGenerationSchema(type: String.self)
-                ),
-                .init(
-                    name: "explanation",
-                    description: "What this step does, at most 10 words.",
-                    schema: DynamicGenerationSchema(type: String.self)
-                ),
-            ]
-        )
-        let root = DynamicGenerationSchema(
-            name: "Plan",
-            description: "An ordered plan of shell commands accomplishing the user's task",
-            properties: [
-                .init(
-                    name: "steps",
-                    description: "The steps to run, in order.",
-                    schema: DynamicGenerationSchema(
-                        arrayOf: DynamicGenerationSchema(referenceTo: "PlanStep"),
-                        minimumElements: 1,
-                        maximumElements: maxSteps
-                    )
-                ),
-            ]
-        )
-        return try GenerationSchema(root: root, dependencies: [step])
-    }
+    @Guide(description: "A concise explanation of the command, at most 10 words.")
+    var explanation: String
+}
+
+@Generable(description: "One step of an ordered shell command plan")
+struct GeneratedPlanStep {
+    @Guide(description: "The raw shell command for this step. No markdown, no placeholders like <path>.")
+    var cmd: String
+
+    @Guide(description: "What this step does, at most 10 words.")
+    var explanation: String
+}
+
+@Generable(description: "An ordered plan of shell commands accomplishing the user's task")
+struct GeneratedPlan {
+    /// The step cap was prompt-only guidance in `callAIPlan`; as a guide it is
+    /// enforced by the decoder instead.
+    @Guide(description: "The steps to run, in order.", .count(1...AIPrompts.maxPlanSteps))
+    var steps: [GeneratedPlanStep]
 }
 
 /// On-device Apple Intelligence provider.
@@ -129,19 +90,18 @@ struct AppleIntelligenceProvider: AIProvider {
         let session = LanguageModelSession(instructions: AIPrompts.commandPreamble())
         let response = try await session.respond(
             to: AIPrompts.commandUserPrompt(request: request, cwd: cwd),
-            schema: try AppleSchemas.command()
+            generating: GeneratedCommand.self
         )
 
-        let command = try response.content
-            .value(String.self, forProperty: "command")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let generated = response.content
+        let command = generated.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !command.isEmpty else {
             throw AIError.badResponse("Apple Intelligence returned an empty command")
         }
-        let explanation = try response.content
-            .value(String.self, forProperty: "explanation")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return CommandSuggestion(command: command, explanation: explanation)
+        return CommandSuggestion(
+            command: command,
+            explanation: generated.explanation.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
 
     func plan(goal: String, cwd: String) async throws -> [PlanStep] {
@@ -150,17 +110,14 @@ struct AppleIntelligenceProvider: AIProvider {
         let session = LanguageModelSession(instructions: AIPrompts.planPreamble())
         let response = try await session.respond(
             to: AIPrompts.planUserPrompt(goal: goal, cwd: cwd),
-            schema: try AppleSchemas.plan(maxSteps: AIPrompts.maxPlanSteps)
+            generating: GeneratedPlan.self
         )
 
-        let rawSteps = try response.content.value([GeneratedContent].self, forProperty: "steps")
-        let steps = try rawSteps
-            .map { step in
+        let steps = response.content.steps
+            .map {
                 PlanStep(
-                    cmd: try step.value(String.self, forProperty: "cmd")
-                        .trimmingCharacters(in: .whitespacesAndNewlines),
-                    explanation: try step.value(String.self, forProperty: "explanation")
-                        .trimmingCharacters(in: .whitespacesAndNewlines)
+                    cmd: $0.cmd.trimmingCharacters(in: .whitespacesAndNewlines),
+                    explanation: $0.explanation.trimmingCharacters(in: .whitespacesAndNewlines)
                 )
             }
             .filter { !$0.cmd.isEmpty }

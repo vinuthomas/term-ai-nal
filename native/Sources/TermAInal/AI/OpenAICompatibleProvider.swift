@@ -234,6 +234,10 @@ struct OpenAICompatibleProvider: AIProvider {
         ]
         if flavor == .ollama {
             body["stream"] = false
+            // Harmlessly ignored by models without a thinking mode. It does not
+            // reliably suppress reasoning either — qwen3 still emits its trace
+            // into `content` — but it helps where the model honours it.
+            body["think"] = false
         }
         if let schema {
             switch schemaSupport {
@@ -250,6 +254,11 @@ struct OpenAICompatibleProvider: AIProvider {
             }
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
+
+        // A local model can spend most of a minute just loading before it
+        // emits a token, and a reasoning model spends more of it thinking.
+        // URLSession's 60s default was timing those out mid-generation.
+        request.timeoutInterval = flavor == .ollama ? 300 : 90
 
         let (data, response) = try await URLSession.shared.data(for: request)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
