@@ -5,7 +5,7 @@ import SwiftTerm
 /// listener in `App.tsx`: on AppKit, shortcuts are menu-item key equivalents,
 /// which get "don't fire while a text field is focused" behaviour for free
 /// instead of the renderer's manual `isInputFocused` guard.
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMenuDelegate {
     private var window: NSWindow!
     private let tabs = TabController()
 
@@ -13,9 +13,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// background tabs keep running but are not the target of a shortcut.
     private var panes: PaneController? { tabs.activePanes }
     private var mcpServer: MCPServer?
-    /// Held while the sheet is up; released when it closes.
-    private var palette: AIPaletteController?
     private var settingsController: SettingsWindowController?
+    /// Rebuilt on each opening by `menuNeedsUpdate` to list only tabs/panes
+    /// that currently exist, rather than a fixed bank of nine.
+    private let selectTabMenu = NSMenu(title: "Select Tab")
+    private let focusPaneMenu = NSMenu(title: "Focus Pane")
     /// Kept so its pressed state can follow the sidebar.
     private var sidebarToggle: NSButton?
 
@@ -385,42 +387,65 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
 
-        // Shell menu — the split/close/focus shortcuts from App.tsx
+        // View menu — the split/close/focus shortcuts from App.tsx plus the
+        // assistant sidebar toggle (there is no other menu it belongs under
+        // now that AI only had that one item).
         // Cmd+T is New Tab and Cmd+1..9 select tabs, which is what every other
         // macOS terminal does. The Electron build bound Cmd+T to split-right
         // and the digits to panes; those move to Cmd+D and Cmd+Alt+digit.
-        let shellMenuItem = NSMenuItem()
-        let shellMenu = NSMenu(title: "Shell")
-        addItem(to: shellMenu, "New Tab", #selector(newTab), "t", [.command])
-        addItem(to: shellMenu, "Close Tab", #selector(closeTab), "w", [.command, .shift])
-        shellMenu.addItem(.separator())
-        addItem(to: shellMenu, "Next Tab", #selector(nextTab), "]", [.command, .shift])
-        addItem(to: shellMenu, "Previous Tab", #selector(previousTab), "[", [.command, .shift])
-        for number in 1...9 {
-            addItem(to: shellMenu, "Tab \(number)", #selector(selectTab(_:)), "\(number)", [.command], tag: number)
-        }
-        shellMenu.addItem(.separator())
-        addItem(to: shellMenu, "New Pane", #selector(addPane), "d", [.command])
-        addItem(to: shellMenu, "Close Pane", #selector(closePane), "w", [.command])
-        for number in 1...9 {
-            addItem(to: shellMenu, "Focus Pane \(number)", #selector(focusPane(_:)), "\(number)", [.command, .option], tag: number)
-        }
-        shellMenu.addItem(.separator())
-        addItem(to: shellMenu, "Clear Screen and Scrollback", #selector(clearAll), "k", [.command])
-        addItem(to: shellMenu, "Clear Screen", #selector(clearScreen), "l", [.command])
-        shellMenuItem.submenu = shellMenu
-        mainMenu.addItem(shellMenuItem)
+        //
+        // "Select Tab" and "Focus Pane" list only tabs/panes that currently
+        // exist (rebuilt by menuNeedsUpdate just before each opens), rather
+        // than a fixed bank of nine — the key equivalents still work up to
+        // whatever exists, since TabController/PaneController already bounds-
+        // check the index.
+        let viewMenuItem = NSMenuItem()
+        let viewMenu = NSMenu(title: "View")
+        addItem(to: viewMenu, "New Tab", #selector(newTab), "t", [.command])
+        addItem(to: viewMenu, "Close Tab", #selector(closeTab), "w", [.command, .shift])
+        viewMenu.addItem(.separator())
+        addItem(to: viewMenu, "Next Tab", #selector(nextTab), "]", [.command, .shift])
+        addItem(to: viewMenu, "Previous Tab", #selector(previousTab), "[", [.command, .shift])
+        let selectTabItem = NSMenuItem(title: "Select Tab", action: nil, keyEquivalent: "")
+        selectTabMenu.delegate = self
+        selectTabItem.submenu = selectTabMenu
+        viewMenu.addItem(selectTabItem)
+        viewMenu.addItem(.separator())
+        addItem(to: viewMenu, "New Pane", #selector(addPane), "d", [.command])
+        addItem(to: viewMenu, "Close Pane", #selector(closePane), "w", [.command])
+        let focusPaneItem = NSMenuItem(title: "Focus Pane", action: nil, keyEquivalent: "")
+        focusPaneMenu.delegate = self
+        focusPaneItem.submenu = focusPaneMenu
+        viewMenu.addItem(focusPaneItem)
+        viewMenu.addItem(.separator())
+        addItem(to: viewMenu, "Clear Screen and Scrollback", #selector(clearAll), "k", [.command])
+        addItem(to: viewMenu, "Clear Screen", #selector(clearScreen), "l", [.command])
+        viewMenu.addItem(.separator())
+        addItem(to: viewMenu, "Toggle Assistant Sidebar", #selector(toggleAssistant), "a", [.command, .shift])
+        viewMenuItem.submenu = viewMenu
+        mainMenu.addItem(viewMenuItem)
 
-        // AI menu
-        let aiMenuItem = NSMenuItem()
-        let aiMenu = NSMenu(title: "AI")
-        addItem(to: aiMenu, "Command Palette…", #selector(openAIPalette), "p", [.command, .shift])
-        aiMenu.addItem(.separator())
-        addItem(to: aiMenu, "Toggle Assistant Sidebar", #selector(toggleAssistant), "a", [.command, .shift])
-        aiMenuItem.submenu = aiMenu
-        mainMenu.addItem(aiMenuItem)
+        // Help menu — registered as NSApp.helpMenu so macOS also surfaces its
+        // items (and their key equivalents) in the built-in Help search field.
+        let helpMenuItem = NSMenuItem()
+        let helpMenu = NSMenu(title: "Help")
+        helpMenu.addItem(withTitle: "term-ai-nal Help", action: #selector(openHelp), keyEquivalent: "")
+        helpMenu.addItem(.separator())
+        let versionItem = NSMenuItem(title: "Version \(Self.appVersion)", action: nil, keyEquivalent: "")
+        versionItem.isEnabled = false
+        helpMenu.addItem(versionItem)
+        helpMenu.addItem(withTitle: "Acknowledgments & Licenses…", action: #selector(openLicenses), keyEquivalent: "")
+        helpMenuItem.submenu = helpMenu
+        mainMenu.addItem(helpMenuItem)
+        NSApp.helpMenu = helpMenu
 
         NSApp.mainMenu = mainMenu
+    }
+
+    private static var appVersion: String {
+        let short = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        return build.map { "\(short) (\($0))" } ?? short
     }
 
     private func addItem(
@@ -438,6 +463,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         menu.addItem(item)
     }
 
+    // MARK: - NSMenuDelegate
+
+    /// Rebuilds `selectTabMenu`/`focusPaneMenu` right before they open, so
+    /// each lists exactly the tabs or panes that exist right now — a
+    /// checkmark on the current one — instead of a fixed Tab/Pane 1...9.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        switch menu {
+        case selectTabMenu:
+            menu.items = tabs.tabs.enumerated().map { index, tab in
+                let item = NSMenuItem(title: tab.title, action: #selector(selectTab(_:)), keyEquivalent: index < 9 ? "\(index + 1)" : "")
+                item.keyEquivalentModifierMask = [.command]
+                item.target = self
+                item.tag = index + 1
+                item.state = index == tabs.selectedIndex ? .on : .off
+                return item
+            }
+        case focusPaneMenu:
+            let paneCount = panes?.panes.count ?? 0
+            let expandedIndex = panes?.expandedIndex ?? -1
+            menu.items = (paneCount > 0 ? Array(1...paneCount) : []).map { number in
+                let item = NSMenuItem(title: "Pane \(number)", action: #selector(focusPane(_:)), keyEquivalent: number < 10 ? "\(number)" : "")
+                item.keyEquivalentModifierMask = [.command, .option]
+                item.target = self
+                item.tag = number
+                item.state = number - 1 == expandedIndex ? .on : .off
+                return item
+            }
+        default:
+            break
+        }
+    }
+
     // MARK: - Actions
 
     // Tabs
@@ -453,6 +510,46 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func addPane() { panes?.addPane() }
     @objc private func closePane() { panes?.closeActivePane() }
     @objc private func focusPane(_ sender: NSMenuItem) { panes?.focusPane(number: sender.tag) }
+
+    // Help — shortcuts moved here once they were tucked into submenus above,
+    // plus the version and license notices a normal macOS app surfaces.
+    @objc private func openHelp() {
+        let alert = NSAlert()
+        alert.messageText = "term-ai-nal Help"
+        alert.informativeText = """
+        Keyboard shortcuts
+
+        ⌘T New Tab · ⌘⇧W Close Tab · ⌘⇧] / ⌘⇧[ Next / Previous Tab · ⌘1–9 Select Tab
+        ⌘D New Pane · ⌘W Close Pane · ⌘⌥1–9 Focus Pane
+        ⌘K Clear Screen and Scrollback · ⌘L Clear Screen
+        ⌘⇧A Toggle Assistant Sidebar · ⌘, Settings
+        ⌘C / ⌘V / ⌘A Copy / Paste / Select All
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "OK")
+        alert.runModal()
+    }
+
+    @objc private func openLicenses() {
+        let alert = NSAlert()
+        alert.messageText = "Acknowledgments & Licenses"
+        alert.informativeText = """
+        term-ai-nal \(Self.appVersion) — MIT licensed.
+
+        Built on SwiftTerm (github.com/migueldeicaza/SwiftTerm), MIT licensed.
+
+        Bundles JetBrainsMonoNL Nerd Font Mono: JetBrains Mono under the SIL \
+        Open Font License 1.1, with Nerd Fonts icon glyphs under a mix of \
+        licenses, including Font Awesome under CC BY 4.0. Full notice in \
+        Fonts/NOTICE.md inside the app's Resources.
+        """
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "Reveal Notices in Finder")
+        alert.addButton(withTitle: "OK")
+        if alert.runModal() == .alertFirstButtonReturn, let resources = Bundle.main.resourceURL {
+            NSWorkspace.shared.activateFileViewerSelecting([resources])
+        }
+    }
 
     /// Image first, then text — the Cmd+V order the Electron build used.
     @objc private func pasteIntoTerminal() {
@@ -502,16 +599,5 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         restartMcpServer()
         settingsController = nil
-    }
-
-    @objc private func openAIPalette() {
-        let cwd = panes?.activeTerminal?.currentCwd
-        let controller = AIPaletteController(cwd: cwd) { [weak self] command in
-            // Never auto-executed: this only runs after the user hits Execute in
-            // the review sheet. Same invariant as the Electron overlay.
-            self?.panes?.activeTerminal?.sendToShell(command + "\n")
-        }
-        palette = controller
-        controller.present(in: window)
     }
 }

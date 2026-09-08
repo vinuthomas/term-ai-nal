@@ -30,6 +30,10 @@ if [ -d Resources/Fonts ]; then
     cp Resources/Fonts/OFL.txt Resources/Fonts/NOTICE.md "$APP/Contents/Resources/Fonts/" 2>/dev/null || true
 fi
 
+# --- License ---
+# Surfaced by the Help menu's "Reveal Notices in Finder".
+cp LICENSE "$APP/Contents/Resources/LICENSE.txt" 2>/dev/null || true
+
 # --- App icon ---
 # Generates a full iconset from Resources/AppIcon.png (1024x1024), cached and
 # rebuilt only when the source changes. electron-builder used to do this step;

@@ -6,13 +6,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Term-AI-nal is a native AppKit terminal emulator for macOS, built on
 [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (`LocalProcessTerminalView` drives a
-real `zsh --login` per pane). Layered on top: an AI command palette, an assistant sidebar
-that comments on commands after they finish, and a built-in MCP server so external agents
-can list panes, read output, stream it over SSE and send input.
+real `zsh --login` per pane). Layered on top: an assistant sidebar that comments on commands
+after they finish, and a built-in MCP server so external agents can list panes, read output,
+stream it over SSE and send input.
 
-The safety invariant, unchanged since the Electron build: **a generated command is never
-executed on the user's behalf.** Generation only fills the review sheet; only the Execute
-button writes to the shell.
+The AI command palette (generate a command into a review sheet, run it only on Execute) was
+removed as unused — see Known Gaps. The underlying `suggestCommand` provider methods and the
+`commandProfile` settings/`--check-ai` plumbing are untouched, since nothing else depends on
+whether a UI ever calls them.
 
 The repo was an Electron/React/xterm.js app. That is retired and deleted — the tag
 `electron-final` preserves it, and `docs/MIGRATION.md` records what was ported, what was
@@ -153,17 +154,11 @@ because a schema is a strong constraint, not a proof. `ReplyCleaner` handles `<t
 variants a schema cannot catch, because the tags land *inside* the field. Ollama gets a 300s
 timeout (a cold local model can spend most of a minute loading), cloud providers 90s.
 
-One command palette, no modes. It always asks for a plan and renders a one-step plan as a
-single command, so the model decides how many commands a request needs — the user is not
-asked to classify their own request first. The opener is an
-`NSTitlebarAccessoryViewController` button rather than a tab-bar one, because the tab bar
-hides itself at one tab, which is most of the time.
-
 ### Where things live
 
 - `App/` — `main.swift` (the `--check-*` flags plus the hand-rolled `NSApplication`
   lifecycle, since SPM has no `@NSApplicationMain`), `AppDelegate` (window, menu with all key
-  equivalents, MCP wiring, titlebar accessory), `AIPaletteController` (the review sheet).
+  equivalents, MCP wiring, titlebar accessory).
 - `Panes/` — `TerminalPaneModel`, `PaneController`/`AccordionContainerView`,
   `AccordionHeader`, `TerminalPaneView`, `ProcessCwd`, `SessionStore`, `NewPaneDirectory`.
 - `Tabs/` — `TabController`, `TabBarView`.
@@ -264,8 +259,8 @@ Each of these was learned by shipping the opposite.
 `Cmd+T` new tab · `Cmd+Shift+W` close tab · `Cmd+Shift+]`/`[` next/previous tab ·
 `Cmd+1`–`9` select tab · `Cmd+D` new pane · `Cmd+Alt+1`–`9` expand pane · `Cmd+W` close pane
 (closes the tab when it is the last pane) · `Cmd+K` clear screen and scrollback · `Cmd+L`
-clear screen · `Cmd+Shift+P` command palette · `Cmd+Shift+A` toggle assistant sidebar ·
-`Cmd+,` settings · `Cmd+C`/`Cmd+V`/`Cmd+A` copy / paste / select all.
+clear screen · `Cmd+Shift+A` toggle assistant sidebar · `Cmd+,` settings · `Cmd+C`/`Cmd+V`/
+`Cmd+A` copy / paste / select all.
 
 These are `NSMenuItem` key equivalents, which is why they do not fire while a text field has
 focus. They differ from the Electron build: tabs took the conventional bindings (`Cmd+T`,
@@ -296,7 +291,11 @@ Do not assume these work; `docs/MIGRATION.md` is the authoritative list.
   the distinct 403 "not visible to MCP" response collapsed into a 404.
 - **MCP restart on settings change** — `MCPServer` is immutable per port, so changing the
   port or the enabled flag needs `stop()` plus a fresh instance. Not wired up.
-- **Follow-up refinement** of a generated command is not implemented.
+- **AI command palette removed.** `AIPaletteController` (the generate-into-a-review-sheet
+  UI, `Cmd+Shift+P`) was deleted as unused. `AIService.suggestCommand` and the
+  `commandProfile` settings/editor/`--check-ai` role are left in place — nothing else in the
+  app calls the former, so reviving the palette (or another caller) needs no provider-layer
+  work, just a new consumer.
 - **iTerm theme import is dropped by decision.** Four built-ins only;
   `customTheme`/`customThemeName` are deliberately absent from `AppSettings`.
 - Signing, notarization and DMG packaging do not exist yet — `make-app.sh` ad-hoc signs.
