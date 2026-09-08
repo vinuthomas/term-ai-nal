@@ -7,8 +7,10 @@ if CommandLine.arguments.contains("--check-ai") {
     AIDiagnostics.runAndExit()
 }
 
-// SPM builds a bare executable, so the NSApplication lifecycle is set up by hand
-// rather than via @NSApplicationMain.
+// `--check-contrast` audits the derived sidebar colours against their floors
+// for every built-in theme, and exits non-zero on a violation. Theming has
+// been a recurring source of unreadable output, so it is checked rather than
+// eyeballed.
 if CommandLine.arguments.contains("--check-contrast") {
     _ = NSApplication.shared
     func pad(_ s: String, _ n: Int) -> String {
@@ -19,11 +21,11 @@ if CommandLine.arguments.contains("--check-contrast") {
     print(pad("theme", 16) + pad("body", 8) + pad("dim", 8) + pad("cardΔ", 9) + pad("accent", 8) + "verdict")
     var allPass = true
     for theme in TerminalThemes.all {
-        let p = AssistantSidebarView.Palette(theme: theme)
-        let body = p.text.contrastRatio(against: p.surfaceFill)
-        let dim = p.dimText.contrastRatio(against: p.surfaceFill)
-        let card = abs(p.surfaceFill.relativeLuminance - p.background.relativeLuminance)
-        let accent = p.failureAccent.contrastRatio(against: p.background)
+        let palette = AssistantSidebarView.Palette(theme: theme)
+        let body = palette.text.contrastRatio(against: palette.surfaceFill)
+        let dim = palette.dimText.contrastRatio(against: palette.surfaceFill)
+        let card = abs(palette.surfaceFill.relativeLuminance - palette.background.relativeLuminance)
+        let accent = palette.failureAccent.contrastRatio(against: palette.background)
         let ok = body >= 4.5 && dim >= 4.5 && card >= 0.029 && accent >= 3.0
         allPass = allPass && ok
         print(pad(theme.key, 16) + pad(two(body), 8) + pad(two(dim), 8)
@@ -34,6 +36,47 @@ if CommandLine.arguments.contains("--check-contrast") {
     exit(allPass ? 0 : 1)
 }
 
+// `--check-titlebar` verifies the palette accessory gets a real width.
+// NSTitlebarAccessoryViewController sizes its view from the frame and ignores
+// Auto Layout's fittingSize, so a constraint-only container silently stayed
+// 0pt wide and the button rendered invisibly.
+if CommandLine.arguments.contains("--check-titlebar") {
+    let application = NSApplication.shared
+    application.setActivationPolicy(.regular)
+
+    let window = NSWindow(
+        contentRect: NSRect(x: 0, y: 0, width: 1000, height: 700),
+        styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+        backing: .buffered,
+        defer: false
+    )
+    window.title = "~/code"
+    window.titlebarAppearsTransparent = true
+    window.titleVisibility = .visible
+    window.contentView = NSView()
+
+    // The shipped factory, not a copy of it.
+    let accessory = AppDelegate.makePaletteAccessory(
+        target: application,
+        action: #selector(NSApplication.terminate(_:))
+    )
+    window.addTitlebarAccessoryViewController(accessory)
+    window.center()
+    window.makeKeyAndOrderFront(nil)
+    RunLoop.main.run(until: Date().addingTimeInterval(1.5))
+
+    let container = accessory.view
+    let button = container.subviews.first
+    print("accessories : \(window.titlebarAccessoryViewControllers.count)")
+    print("container   : \(container.frame)")
+    print("button      : \(button?.frame.debugDescription ?? "nil")")
+    let ok = container.frame.width > 40 && (button?.frame.width ?? 0) > 40
+    print(ok ? "\nbutton has a real width" : "\nZERO WIDTH — still invisible")
+    exit(ok ? 0 : 1)
+}
+
+// SPM builds a bare executable, so the NSApplication lifecycle is set up by
+// hand rather than via @NSApplicationMain.
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate

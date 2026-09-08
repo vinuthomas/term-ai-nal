@@ -142,27 +142,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// shortcut are not discoverability — you have to already know the feature
     /// exists to find either.
     private func installPaletteButton() {
-        let button = NSButton(title: "Command Palette", target: self, action: #selector(openAIPalette))
+        window.addTitlebarAccessoryViewController(
+            Self.makePaletteAccessory(target: self, action: #selector(openAIPalette))
+        )
+    }
+
+    /// Builds the titlebar accessory.
+    ///
+    /// The container is given an explicit frame. `NSTitlebarAccessoryViewController`
+    /// sizes its view from the frame and ignores Auto Layout's `fittingSize`, so
+    /// with constraints alone the container stayed 0pt wide and the button was
+    /// laid out at zero width — present in the view hierarchy and invisible.
+    static func makePaletteAccessory(target: AnyObject, action: Selector) -> NSTitlebarAccessoryViewController {
+        let button = NSButton(title: "Command Palette", target: target, action: action)
         button.bezelStyle = .accessoryBarAction
         button.controlSize = .small
         button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
         button.imagePosition = .imageLeading
         button.toolTip = "Describe what you want to do (\u{2318}\u{21E7}P)"
-        button.translatesAutoresizingMaskIntoConstraints = false
 
-        let container = NSView()
+        let height: CGFloat = 28
+        let trailingInset: CGFloat = 10
+        let size = button.intrinsicContentSize
+        button.frame = NSRect(
+            x: 0,
+            y: ((height - size.height) / 2).rounded(),
+            width: size.width,
+            height: size.height
+        )
+
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: size.width + trailingInset, height: height))
         container.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            button.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
-            button.centerYAnchor.constraint(equalTo: container.centerYAnchor),
-            container.heightAnchor.constraint(equalToConstant: 28),
-        ])
 
         let accessory = NSTitlebarAccessoryViewController()
         accessory.view = container
         accessory.layoutAttribute = .right
-        window.addTitlebarAccessoryViewController(accessory)
+        return accessory
     }
 
     // MARK: - Assistant sidebar
