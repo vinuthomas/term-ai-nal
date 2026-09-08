@@ -268,10 +268,14 @@ standard responder-chain selectors that SwiftTerm's `TerminalView` already imple
 
 Do not assume these work; `docs/MIGRATION.md` is the authoritative list.
 
-- **Anthropic and Gemini providers are unported** — `AIService.provider(for:)` returns nil
-  for both, and the settings UI omits them rather than offering dead ends. Apple, OpenAI,
-  Perplexity and Ollama are wired; OpenAI and Perplexity are **untested against a real key**,
-  and OpenAI's `response_format` JSON-schema branch is written but unexercised.
+- **All six providers are wired** (`apple`, `anthropic`, `openai`, `gemini`, `perplexity`,
+  `ollama`), but **no cloud provider has been run against its real API** — there are no keys
+  on this machine. `--check-cloud` plus `Scripts/mock-ai-api.py` covers the request shape for
+  Anthropic and Gemini (auth header, schema placement, decoding); OpenAI and Perplexity have
+  no equivalent. The model IDs in the defaults are unverified. When touching a cloud provider,
+  note that each carries the shared `AISchemas` to a different mechanism, and that Anthropic
+  rejects three patterns an older prior would reach for: forced `tool_choice`, an assistant
+  prefill, and the deprecated top-level `output_format`.
 - **Private Cloud Compute**: `appleModel: "pcc"` is accepted but served on-device. The SDK
   exposes no way to request PCC; the TODO deliberately does not fake it.
 - **Image paste** is implemented (clipboard image → PNG → iTerm2 OSC 1337 `File=`, falling

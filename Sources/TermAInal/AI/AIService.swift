@@ -96,11 +96,10 @@ enum AIService {
             return AppleIntelligenceProvider(settings: profile)
         case "openai", "perplexity", "ollama":
             return OpenAICompatibleProvider(settings: profile)
-        case "anthropic", "gemini":
-            // TODO: port the `anthropic` and `gemini` branches of `callAIRaw`.
-            // Both use a bespoke request/response shape, so they do not fit
-            // OpenAICompatibleProvider and need providers of their own.
-            return nil
+        case "anthropic":
+            return AnthropicProvider(settings: profile)
+        case "gemini":
+            return GeminiProvider(settings: profile)
         default:
             return nil
         }

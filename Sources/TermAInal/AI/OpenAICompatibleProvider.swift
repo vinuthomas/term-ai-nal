@@ -51,9 +51,13 @@ struct OpenAICompatibleProvider: AIProvider {
             system: AIPrompts.commandPreamble()
                 + (constrained == .none ? AIPrompts.strictCommandFormat() : ""),
             user: AIPrompts.commandUserPrompt(request: request, cwd: cwd),
-            schema: constrained == .none ? nil : Self.commandSchema
+            schema: constrained == .none ? nil : AISchemas.command
         )
-        return constrained == .none ? try Self.parseCommand(text) : try Self.decodeCommand(text)
+        guard constrained != .none else { return try Self.parseCommand(text) }
+        // A schema is a strong constraint, not a proof: some servers ignore the
+        // field, so the prose parser stays as a fallback.
+        if let decoded = AISchemas.decodeCommand(text) { return decoded }
+        return try Self.parseCommand(text)
     }
 
     func answer(question: String, context: String) async throws -> String {
@@ -61,32 +65,12 @@ struct OpenAICompatibleProvider: AIProvider {
         let text = try await complete(
             system: AIPrompts.assistantPreamble(),
             user: context.isEmpty ? question : "\(context)\n\n\(question)",
-            schema: constrained == .none ? nil : Self.answerSchema
+            schema: constrained == .none ? nil : AISchemas.answer
         )
-        guard constrained != .none,
-              let data = Self.stripCodeFence(text).data(using: .utf8),
-              let decoded = try? JSONDecoder().decode(SchemaAnswer.self, from: data)
-        else {
-            return ReplyCleaner.clean(text)
-        }
-        return ReplyCleaner.clean(decoded.answer)
+        guard constrained != .none else { return ReplyCleaner.clean(text) }
+        return AISchemas.decodeAnswer(text) ?? ReplyCleaner.clean(text)
     }
 
-    private static let answerSchema: [String: Any] = [
-        "type": "object",
-        "properties": [
-            "answer": [
-                "type": "string",
-                "description": "The answer, at most three sentences. Plain prose, no markdown, no reasoning narration.",
-            ],
-        ],
-        "required": ["answer"],
-        "additionalProperties": false,
-    ]
-
-    private struct SchemaAnswer: Decodable {
-        let answer: String
-    }
 
     func plan(goal: String, cwd: String) async throws -> [PlanStep] {
         let constrained = schemaSupport
@@ -94,9 +78,11 @@ struct OpenAICompatibleProvider: AIProvider {
             system: AIPrompts.planPreamble()
                 + (constrained == .none ? AIPrompts.strictPlanFormat() : ""),
             user: AIPrompts.planUserPrompt(goal: goal, cwd: cwd),
-            schema: constrained == .none ? nil : Self.planSchema
+            schema: constrained == .none ? nil : AISchemas.plan
         )
-        return constrained == .none ? try Self.parsePlan(text) : try Self.decodePlan(text)
+        guard constrained != .none else { return try Self.parsePlan(text) }
+        if let steps = AISchemas.decodePlan(text) { return steps }
+        return try Self.parsePlan(text)
     }
 
     // MARK: - JSON schemas

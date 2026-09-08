@@ -59,12 +59,20 @@ coverage in the repo.
 | `--check-titlebar` | The titlebar accessory (the assistant toggle) gets a non-zero width rather than rendering invisibly. |
 | `--check-locale` | Apple Intelligence locale support — `Locale.current`, bundle localizations, `supportsLocale`, and a live request. |
 | `--check-ctrld` | Ctrl+D teardown at all three levels: split pane → tab → window. |
+| `--check-cloud` | The Anthropic and Gemini request shape — auth header, schema placement, response decoding — against `Scripts/mock-ai-api.py`, which must be running. |
 
 Run them against the built binary, e.g.
 `./build/TermAInal.app/Contents/MacOS/TermAInal --check-ai`.
 
-Not covered by any of these, and unverified at runtime: OpenAI and Perplexity
-(no key has been used against them), and image paste rendering.
+To run the last one, start the mock first:
+
+```bash
+python3 Scripts/mock-ai-api.py &
+./build/TermAInal.app/Contents/MacOS/TermAInal --check-cloud
+```
+
+Not covered by any of these, and unverified at runtime: any cloud provider
+against its real API (no keys have been used), and image paste rendering.
 
 ## Features
 
@@ -121,13 +129,21 @@ produced `ls -l | sort -rn | tail -n 1`, which sorts by link count and returns
 the smallest file. A coder-tuned local model (`qwen3:4b`) was the reverse trade
 — accurate syntax, ~2.6 GB resident. Neither is right for both jobs.
 
-Working providers: **`apple`** (FoundationModels, on-device), **`openai`**,
-**`perplexity`**, **`ollama`**.
+All six providers work: **`apple`** (FoundationModels, on-device),
+**`anthropic`**, **`openai`**, **`gemini`**, **`perplexity`**, **`ollama`**.
 
-**`anthropic` and `gemini` are not ported.** `AIService.provider(for:)` returns
-nil for both and the settings UI omits them rather than offering a dead end. A
-settings file naming one is shown as `"<name> (not ported)"` rather than being
-silently rewritten.
+`anthropic`, `openai`, `gemini` and `ollama` also accept a **Base URL**
+override, for a proxy or gateway. Perplexity's endpoint is fixed and Apple has
+none.
+
+Anthropic uses `output_config.format` with a JSON schema — not a forced
+`tool_choice`, which current models reject with a 400, and not an assistant
+prefill, which they also reject. Gemini uses `generationConfig.responseSchema`,
+with `additionalProperties` stripped because Gemini's schema subset rejects it.
+
+**Neither has been run against a live API from this machine** — no keys. Their
+request shape is verified against `Scripts/mock-ai-api.py` via `--check-cloud`
+(see Diagnostics); the model IDs in their defaults are unverified.
 
 `appleModel: "pcc"` (Private Cloud Compute) is accepted but served on-device —
 PCC needs macOS 27 and the current SDK exposes no way to request it.
@@ -232,6 +248,9 @@ read it before distributing a build.
   (`PaneNode.label` is plumbed to MCP but nothing sets it), MCP hidden panes,
   follow-up refinement of a generated command, and the iTerm theme importer
   (dropped by decision).
+- No cloud provider has been exercised against its real API. `--check-cloud`
+  covers the request shape for Anthropic and Gemini; OpenAI and Perplexity have
+  no equivalent.
 
 ## Licence
 

@@ -44,7 +44,9 @@ private final class AIProfileEditor: NSView {
     /// ported yet, so listing them would offer a dead end.
     private static let supportedProviders: [(key: String, title: String)] = [
         ("apple", "Apple Intelligence (on-device)"),
+        ("anthropic", "Anthropic (Claude)"),
         ("openai", "OpenAI"),
+        ("gemini", "Google Gemini"),
         ("perplexity", "Perplexity"),
         ("ollama", "Ollama (local)"),
     ]
@@ -219,7 +221,10 @@ private final class AIProfileEditor: NSView {
         statusRow.isHidden = !isApple
         apiKeyRow.isHidden = isApple || isOllama
         modelRow.isHidden = isApple
-        baseUrlRow.isHidden = !(provider == "openai" || isOllama)
+        // Every provider whose endpoint can be overridden — for a proxy or a
+        // gateway. Perplexity is absent because its provider hardcodes the URL,
+        // and Apple has no endpoint at all.
+        baseUrlRow.isHidden = !["openai", "ollama", "anthropic", "gemini"].contains(provider)
 
         refreshModelsButton.isHidden = !isOllama
         if isOllama { reloadOllamaModels() }

@@ -183,8 +183,9 @@ Ordered roughly by how much they'd be missed.
 - **Themes.** `themes.ts`' four built-ins and `parseItermTheme` are absent; the
   terminal uses SwiftTerm's defaults. `customTheme`/`customThemeName` are
   omitted from `AppSettings` rather than stored and unused.
-- **Anthropic and Gemini providers.** `AIService.provider(for:)` returns nil for
-  both; the other four work.
+- ~~**Anthropic and Gemini providers.**~~ **Done** — all six providers are
+  wired. Neither has been run against a live API from this machine; see
+  "Cloud providers" below.
 - **Private Cloud Compute.** `appleModel: "pcc"` is accepted but served
   on-device. PCC needs macOS 27; the 26.5 SDK exposes no way to request it. The
   TODO deliberately does not fake it.
@@ -288,6 +289,49 @@ Licensing is in `Resources/Fonts/NOTICE.md`: JetBrains Mono is OFL 1.1, but the
 patched-in icon glyphs aggregate several upstream sets under mixed terms, some
 requiring attribution (Font Awesome is CC BY 4.0). Read that before shipping to
 anyone outside this repo.
+
+## Cloud providers
+
+All six providers are wired: `apple`, `anthropic`, `openai`, `gemini`,
+`perplexity`, `ollama`. Anthropic and Gemini were the last two, and are
+rewrites rather than ports — the Electron versions asked for a text format in
+prose and used 2024-era model defaults.
+
+Each carries the *same* schema to a different mechanism, which is why
+`AISchemas` defines them once: Ollama's `format`, OpenAI's `response_format`,
+Anthropic's `output_config.format`, Gemini's `generationConfig.responseSchema`.
+Two provider-specific traps:
+
+- **Anthropic**: `output_config.format` is the current mechanism. Forcing a tool
+  call with `tool_choice: {type: "tool"}` returns a 400 on current models, an
+  assistant prefill of `{` is also rejected, and the top-level `output_format`
+  parameter is deprecated — all three are patterns a model trained on older docs
+  will reach for. `thinking` is omitted rather than disabled, because explicitly
+  disabling it is a documented cause of tool calls and reasoning tags leaking
+  into visible text. Responses are searched for the first `text` block rather
+  than indexed at `content[0]`, which is a `thinking` block when thinking is on.
+- **Gemini**: `responseSchema` is a JSON Schema *subset* that rejects
+  `additionalProperties`, which the shared schemas must include for the other
+  providers — so it is stripped recursively on the way out. The key goes in the
+  `x-goog-api-key` header, not the URL, so it stays out of logs. A 200 can carry
+  no text at all when `finishReason` is `SAFETY` or `MAX_TOKENS`; that is
+  Gemini's refusal shape and produces a clear error rather than an empty string.
+
+### Verifying providers nobody has keys for
+
+`Scripts/mock-ai-api.py` plus `--check-cloud` is the only coverage these have. A
+wrong field name fails identically to a wrong key against the real API, so the
+parts that are actually ours — auth header, schema placement, response decoding
+— are checked against a local mock instead.
+
+The mock's canned replies are shaped to catch two specific mistakes: the
+Anthropic reply leads with a `thinking` block, so indexing `content[0]` reads
+the wrong thing; the Gemini reply splits its JSON across two `parts`, so taking
+`parts[0]` yields truncated JSON. Both were caught this way rather than in
+production.
+
+Still unverified: every cloud provider against its real API, and the model IDs
+in their defaults.
 
 ## Theme contrast is enforced, not eyeballed
 
@@ -640,9 +684,7 @@ Small, mechanical, and each one is a thing an existing user would notice missing
   it. Needs a rename affordance (double-click a pane header, or a menu item).
 - **Hidden panes.** Re-introduce the explicit "not visible to MCP" concept, or
   decide the `panesProvider` omission is enough and delete the idea.
-- **Anthropic and Gemini providers** — the only two unported, and still an open
-  call. Apple, OpenAI, Perplexity and Ollama all work. Ollama is explicitly
-  staying.
+- ~~**Anthropic and Gemini providers**~~ — **done.** All six are wired.
 - **Follow-up refinement** in the AI palette.
 
 ### Phase 3 — The part that justifies the rewrite

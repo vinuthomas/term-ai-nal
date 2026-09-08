@@ -121,6 +121,39 @@ if CommandLine.arguments.contains("--check-ctrld") {
     exit(lastTabClosed && tabs.tabs.isEmpty ? 0 : 1)
 }
 
+// `--check-cloud` exercises the Anthropic and Gemini providers against
+// `Scripts/mock-ai-api.py`, which must already be running. They cannot be
+// reached without paid keys, so this is the only coverage their request shape
+// has: auth header, schema placement, and that the reply decodes.
+if CommandLine.arguments.contains("--check-cloud") {
+    _ = NSApplication.shared
+    func pump(_ s: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
+    let mock = "http://127.0.0.1:8788/v1/mock"
+
+    for provider in ["anthropic", "gemini"] {
+        // Stash and restore any real key rather than clobbering it.
+        let existing = SettingsStore.shared.apiKey(for: provider)
+        SettingsStore.shared.setApiKey("mock-key-not-real", for: provider)
+        defer { SettingsStore.shared.setApiKey(existing, for: provider) }
+
+        let profile = AIProfile(provider: provider, model: "mock-model", baseUrl: mock)
+        guard let impl = AIService.provider(for: profile) else { print("\(provider): no provider"); continue }
+        let sem = DispatchSemaphore(value: 0)
+        Task {
+            defer { sem.signal() }
+            do {
+                let s = try await impl.suggestCommand(request: "list files by size", cwd: "/tmp")
+                print("  \(provider.padding(toLength: 10, withPad: " ", startingAt: 0)) -> command=\(s.command.debugDescription) explanation=\(s.explanation.debugDescription)")
+            } catch {
+                print("  \(provider.padding(toLength: 10, withPad: " ", startingAt: 0)) -> FAILED \(error.localizedDescription)")
+            }
+        }
+        while sem.wait(timeout: .now() + 0.1) == .timedOut { pump(0.1) }
+        SettingsStore.shared.setApiKey(existing, for: provider)
+    }
+    exit(0)
+}
+
 // SPM builds a bare executable, so the NSApplication lifecycle is set up by
 // hand rather than via @NSApplicationMain.
 let app = NSApplication.shared
