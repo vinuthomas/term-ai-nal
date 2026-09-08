@@ -24,6 +24,15 @@ Xcode also works if you install it.
 The app is deliberately **not sandboxed** — SwiftTerm's child shell needs full
 filesystem access.
 
+`make-app.sh` also generates the app icon, because nothing else does it now:
+electron-builder handled that for the Electron target, and the hand-assembled
+bundle initially had no `CFBundleIconFile` at all, so the Dock showed the
+generic placeholder. It builds a full iconset from `build/icon.png` with `sips`
+and `iconutil` rather than reusing the repo's `build/icon.icns`, which contains
+only a single 1024pt representation. The bundle is `touch`ed afterwards, since
+the Dock and Finder cache icons per bundle path and a rebuild in place otherwise
+keeps showing the previous one.
+
 ## What is done
 
 | Area | Electron original | Native replacement |
