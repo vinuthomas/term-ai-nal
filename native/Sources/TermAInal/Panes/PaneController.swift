@@ -57,16 +57,29 @@ final class PaneController {
     /// it can close itself.
     var onEmpty: (() -> Void)?
 
-    /// Best available label: the shell's reported title, else the working
-    /// directory's last component.
-    var displayTitle: String {
-        guard let terminal = terminals[activePaneId] else { return "Shell" }
+    /// The fuller form, for a window title: a whole path, or whatever a program
+    /// named itself. Home is abbreviated the way a shell would write it.
+    var windowTitle: String {
+        guard let terminal = terminals[activePaneId] else { return "term-ai-nal" }
         if let title = terminal.reportedTitle, !title.isEmpty { return title }
-        if let cwd = terminal.currentCwd {
-            let name = (cwd as NSString).lastPathComponent
-            return name.isEmpty ? "/" : name
-        }
-        return "Shell"
+        if let cwd = terminal.currentCwd { return Self.abbreviatingHome(cwd) }
+        return "term-ai-nal"
+    }
+
+    /// The compact form, for a tab label: just the last path component, since a
+    /// tab is too narrow for a path and the leaf is what identifies it.
+    var displayTitle: String {
+        let title = windowTitle
+        guard title.contains("/") else { return title }
+        let name = (title as NSString).lastPathComponent
+        return name.isEmpty ? "/" : name
+    }
+
+    private static func abbreviatingHome(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
     }
 
     /// Restores `snapshot` when one is supplied and usable, otherwise starts

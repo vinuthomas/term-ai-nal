@@ -186,8 +186,24 @@ final class TerminalPaneView: LocalProcessTerminalView {
     }
 
     func updateReportedTitle(_ title: String) {
-        reportedTitle = title
-        onTitleChange?(title)
+        let normalised = Self.normalisedTitle(title)
+        reportedTitle = normalised
+        onTitleChange?(normalised)
+    }
+
+    /// Trims zsh's default `user@host:path` title down to the path.
+    ///
+    /// The user and host never change, so they spend most of a titlebar saying
+    /// nothing. A title a program set for itself — `claude` announcing its task,
+    /// say — contains no `@` before a colon and is left exactly as given, which
+    /// is the part worth showing.
+    static func normalisedTitle(_ title: String) -> String {
+        guard let colon = title.firstIndex(of: ":"),
+              title[title.startIndex..<colon].contains("@")
+        else { return title }
+
+        let path = title[title.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+        return path.isEmpty ? title : path
     }
 
     func updateReportedCwd(_ directory: String) {

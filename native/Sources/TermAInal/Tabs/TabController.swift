@@ -42,6 +42,12 @@ final class TabController: NSObject, TabBarViewDelegate {
     /// right shell.
     var onActivePaneChange: ((String) -> Void)?
 
+    /// The frontmost tab's title, for the window title. Tabs carry their own
+    /// labels, but the window needs to name the tab you are looking at — which
+    /// is what every other terminal does and what went missing when shell
+    /// titles were redirected to the tab bar.
+    var onSelectedTitleChange: ((String) -> Void)?
+
     var activePaneId: String? { selectedTab?.panes.activePaneId }
     var selectedTab: TerminalTab? { tabs.indices.contains(selectedIndex) ? tabs[selectedIndex] : nil }
     var activePanes: PaneController? { selectedTab?.panes }
@@ -181,8 +187,10 @@ final class TabController: NSObject, TabBarViewDelegate {
         }
         tab.panes.onTitleChange = { [weak self, weak tab] title in
             guard let self, let tab else { return }
-            tab.title = title
+            tab.title = tab.panes.displayTitle
+            _ = title
             self.tabBar.setTabs(self.tabs.map(\.title), selected: self.selectedIndex)
+            if self.selectedTab === tab { self.notifySelectedTitle() }
         }
         tab.panes.onEmpty = { [weak self, weak tab] in
             guard let self, let tab, let index = self.tabs.firstIndex(where: { $0 === tab }) else { return }
@@ -227,10 +235,22 @@ final class TabController: NSObject, TabBarViewDelegate {
         closeTab(at: selectedIndex)
     }
 
+    /// Re-emits the current title. Needed because tabs are restored before the
+    /// window exists, so the first notification would otherwise be dropped.
+    func refreshSelectedTitle() {
+        notifySelectedTitle()
+    }
+
+    private func notifySelectedTitle() {
+        // The window gets the fuller path; the tab keeps its compact label.
+        onSelectedTitleChange?(selectedTab?.panes.windowTitle ?? "term-ai-nal")
+    }
+
     private func focusSelected() {
         guard let tab = selectedTab else { return }
         tab.panes.focusPane(paneId: tab.panes.activePaneId)
         onActivePaneChange?(tab.panes.activePaneId)
+        notifySelectedTitle()
     }
 
     // MARK: - Session

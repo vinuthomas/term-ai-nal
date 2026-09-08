@@ -46,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         buildWindow()
         buildMenu()
         restartMcpServer()
+        tabs.refreshSelectedTitle()
 
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -83,7 +84,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.title = "term-ai-nal"
         // The AppKit equivalent of Electron's titleBarStyle: 'hiddenInset'.
         window.titlebarAppearsTransparent = true
-        window.titleVisibility = .hidden
+        // Shown, unlike a plain hidden-inset window: the title is how you tell
+        // what a window is without switching to it, and it names the frontmost
+        // tab. The titlebar strip stays transparent so the tab bar sits under
+        // it and the window remains draggable there.
+        window.titleVisibility = .visible
         applyWindowBackground()
 
         mainSplit.isVertical = true
@@ -95,6 +100,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainSplit.setHoldingPriority(.defaultHigh, forSubviewAt: 1)
 
         assistant.activePaneId = { [weak self] in self?.tabs.activePaneId }
+        tabs.onSelectedTitleChange = { [weak self] title in
+            self?.window.title = title
+        }
         assistant.onCollapseRequested = { [weak self] in self?.setSidebarVisible(false, byUser: true) }
 
         let settings = SettingsStore.shared.settings

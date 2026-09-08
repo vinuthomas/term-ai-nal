@@ -318,6 +318,28 @@ Positions can only be set once the split itself has a width, hence `layout()`
 rather than construction. Measured after the fix: child widths `[599, 599]`,
 spread 0.
 
+### Titles
+
+Three levels, each showing what suits its width:
+
+- **Window title** — the frontmost tab's fuller form: a whole path with home
+  abbreviated to `~`, or whatever a running program named itself. Visible
+  despite the hidden-inset titlebar, because the title is how you identify a
+  window without switching to it.
+- **Tab label** — the compact form, the last path component only. A tab is too
+  narrow for a path and the leaf is what distinguishes it.
+- Neither shows zsh's default `user@host:path` verbatim. The user and host never
+  change, so they spend most of a titlebar saying nothing; `normalisedTitle`
+  keeps the path and leaves a program's own title (no `@` before the colon)
+  exactly as given.
+
+A program's title only persists while it runs — Powerlevel10k's `precmd` resets
+it at every prompt, which is also true in Ghostty.
+
+Note tabs are restored before the window exists, so `refreshSelectedTitle()` is
+called after `buildWindow()`; without it the first notification is dropped and
+the window keeps its placeholder name.
+
 ### Shortcuts changed
 
 Tabs took the conventional bindings, which means the Electron build's
