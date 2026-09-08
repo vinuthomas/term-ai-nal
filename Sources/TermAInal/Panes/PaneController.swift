@@ -211,6 +211,15 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
         focusExpanded()
     }
 
+    /// The terminal is inset inside its row rather than filling it.
+    ///
+    /// SwiftTerm draws glyphs flush to its own bounds and offers no inset, so
+    /// without this the first column collides with the window edge. The older
+    /// split layout achieved the same thing with a padded wrapper view per
+    /// pane; laying rows out by frame makes it an inset instead, which is why
+    /// it went missing in that rewrite. `--check-accordion` asserts it now.
+    static let terminalInset = NSSize(width: 8, height: 6)
+
     /// Called by the host on resize, and after any rebuild.
     func layoutAccordion() {
         let bounds = containerView.bounds
@@ -235,8 +244,16 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
                 headers[pane.paneId]?.isHidden = true
             }
             if index == expandedIndex, let terminal = terminals[pane.paneId] {
+                // The row still consumes the full height; only the terminal
+                // inside it is inset, so the stacking arithmetic is unaffected.
                 y -= terminalHeight
-                terminal.frame = NSRect(x: 0, y: y, width: bounds.width, height: terminalHeight)
+                let inset = Self.terminalInset
+                terminal.frame = NSRect(
+                    x: inset.width,
+                    y: y + inset.height,
+                    width: max(0, bounds.width - inset.width * 2),
+                    height: max(0, terminalHeight - inset.height * 2)
+                )
             }
         }
     }

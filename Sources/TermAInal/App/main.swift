@@ -206,6 +206,21 @@ if CommandLine.arguments.contains("--check-accordion") {
     let mounted2 = panes.containerView.subviews.compactMap { $0 as? TerminalPaneView }.map(\.paneId)
     check("mounted follows expansion", mounted2 == [firstId], "\(mounted2)")
 
+    // Padding: the terminal must not touch the container edges. This has
+    // regressed twice — once absent entirely, once dropped in the accordion
+    // rewrite — so it is asserted rather than eyeballed.
+    if let expanded = panes.terminals[panes.activePaneId] {
+        let bounds = panes.containerView.bounds
+        let frame = expanded.frame
+        let left = frame.minX
+        let right = bounds.maxX - frame.maxX
+        check("terminal inset from edges", left >= 4 && right >= 4,
+              "left \(Int(left)), right \(Int(right))")
+        check("terminal not wider than container", frame.width <= bounds.width)
+    } else {
+        check("terminal inset from edges", false, "no expanded terminal")
+    }
+
     // Headers: one per pane, stacked, non-zero height.
     let headers = panes.containerView.subviews.compactMap { $0 as? AccordionHeader }
     check("one header per pane", headers.count == 3, "\(headers.count)")

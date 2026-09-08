@@ -409,6 +409,13 @@ Two consequences worth knowing:
   a regression that recreates terminal views would kill running shells on an
   ordinary pane switch. `--check-accordion` asserts object identity and
   `process.running` across an expand.
+- **The terminal inset went missing.** SwiftTerm draws glyphs flush to its own
+  bounds, so a pane needs padding or the first column touches the window edge.
+  The split layout achieved that with a padded wrapper view per pane; laying
+  rows out by frame turns it into an inset, and the rewrite simply dropped it.
+  That is the second time this exact padding has been absent, so
+  `--check-accordion` now asserts the expanded terminal is inset from both
+  container edges rather than leaving it to the eye.
 - **Layout is frame-based, so resize has to be observed.** The heights are one
   expression and the views are reparented constantly, which Auto Layout handles
   poorly; `AccordionContainerView.layout()` calls back into `layoutAccordion()`.
