@@ -94,96 +94,88 @@ final class TerminalPaneView: LocalProcessTerminalView {
         return NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
     }
 
-    /// The child shell inherits the app's full environment.
+    /// The environment handed to a pane's shell.
     ///
-    /// `Terminal.getEnvironmentVariables` deliberately returns a minimal set —
-    /// TERM, COLORTERM, LANG and a few of USER/HOME/LOGNAME, with PATH
-    /// explicitly excluded — which is not what a terminal emulator should hand
-    /// its shell. The Electron build spawned with `{...process.env}`, and iTerm2
-    /// and Terminal.app inherit likewise; anything less makes the user's shell
-    /// startup behave differently here than everywhere else.
+    /// Built from the user record and the system, and deliberately **not** from
+    /// this process's own environment.
     ///
-    /// Concretely, a missing `SHELL` made zsh startup scripts take a bash code
-    /// path and emit `(eval):type: bad option: -t`, which then tripped
-    /// Powerlevel10k's instant-prompt console-output warning. `SHELL` is set
-    /// explicitly because a GUI launch via launchd may not provide one.
-    /// Variables a launching process injects for its own use, which must not
-    /// be handed on to a user's shell.
+    /// The first attempt here inherited everything, which leaked the launching
+    /// process's session state: started from a terminal running Claude Code,
+    /// every pane carried `CLAUDE_CODE_CHILD_SESSION`, so a `claude` started
+    /// inside one believed it was a nested child and stopped saving
+    /// transcripts. `CLAUDE_CODE_MESSAGING_TOKEN` is a credential besides.
     ///
-    /// Inheriting the full environment is right — see above — but "full" cannot
-    /// include the launcher's private session state. Launch this app from a
-    /// Claude Code session (which is how it gets launched during development)
-    /// and without this every shell it opens inherits that session's markers:
-    /// `claude` run inside the terminal then sees `CLAUDE_CODE_CHILD_SESSION`,
-    /// concludes it is a nested child, and silently stops saving transcripts.
-    /// `CLAUDE_CODE_MESSAGING_TOKEN` is a credential besides.
+    /// The second attempt scrubbed a denylist of known offenders, which is the
+    /// wrong shape. The same class covers Gemini CLI's `GEMINI_CLI`, Codex's
+    /// `CODEX_SANDBOX` — where a stale value could persuade a tool it is
+    /// already sandboxed — `TMUX`, `STY`, every host terminal's `GHOSTTY_*` /
+    /// `KITTY_*` / `WEZTERM_*` / `VSCODE_*`, `TERMINFO`, `SSH_TTY`, `SHLVL`,
+    /// direnv's bookkeeping, and whatever is written next year. A list that has
+    /// to be complete to be correct will not stay complete.
     ///
-    /// Only session-scoped markers are listed. Genuine user configuration
-    /// (`CLAUDE_CONFIG_DIR`, `ANTHROPIC_*`) is the user's own and passes
-    /// through untouched.
-    /// The same reasoning applies beyond Claude Code: anything identifying the
-    /// terminal or tty we were launched from is a lie in a new pane. An
-    /// inherited `SHLVL` in particular makes a fresh login shell look nested,
-    /// which both prompts and `exit` react to.
-    private static let launcherPrivateVariables = [
-        "CLAUDECODE",
-        "CLAUDE_CODE_ENTRYPOINT",
-        "CLAUDE_CODE_SESSION_ID",
-        "CLAUDE_CODE_CHILD_SESSION",
-        "CLAUDE_CODE_MESSAGING_SOCKET",
-        "CLAUDE_CODE_MESSAGING_TOKEN",
-        "CLAUDE_CODE_EXECPATH",
-        "CLAUDE_PID",
-        "CLAUDE_EFFORT",
-        // Identity of the terminal that launched us.
-        "TERM_SESSION_ID",
-        "ITERM_SESSION_ID",
-        "ITERM_PROFILE",
-        "LC_TERMINAL",
-        "LC_TERMINAL_VERSION",
-        "WINDOWID",
-        // Powerlevel10k's per-tty cache, wrong for a new tty.
-        "_P9K_TTY",
-        "_P9K_SSH_TTY",
-        // The launching application's bundle id.
-        "__CFBundleIdentifier",
-        // Shell bookkeeping that belongs to the parent shell, not this one.
-        "SHLVL",
-        "_",
-        "OLDPWD",
-        "ZSH_EXECUTION_STRING",
-    ]
-
+    /// Inheriting nothing costs less than it appears to, because the child is a
+    /// **login** shell: `/etc/zprofile` (via `path_helper`), `~/.zprofile` and
+    /// `~/.zshrc` rebuild PATH and the user's own exports regardless. A pane
+    /// therefore looks identical whether the app was opened from Finder or from
+    /// a shell, which is the property that was missing.
+    ///
+    /// The trade-off, stated plainly: a variable placed in the GUI session with
+    /// `launchctl setenv` and never exported from a shell profile will no
+    /// longer reach a pane. `SSH_AUTH_SOCK` is carried over as the single
+    /// exception — the agent socket comes from the login session, cannot be
+    /// derived, and losing it breaks commit signing and pushes.
     static func childEnvironment() -> [String] {
-        var environment = ProcessInfo.processInfo.environment
-        for key in launcherPrivateVariables { environment.removeValue(forKey: key) }
-        // Prefix-matched as well, because the tool-owned set grows and a marker
-        // added upstream would otherwise silently start leaking again. Note
-        // this is `CLAUDE_CODE_`, not `CLAUDE_`: the latter would take
-        // `CLAUDE_CONFIG_DIR`, which is the user's own configuration.
-        for key in environment.keys where key.hasPrefix("CLAUDE_CODE_") {
-            environment.removeValue(forKey: key)
-        }
-
-        environment["TERM"] = "xterm-256color"
-        environment["COLORTERM"] = "truecolor"
-        environment["SHELL"] = loginShell
-        // Announce ourselves rather than passing on whoever launched us, so
-        // shell configuration can branch on the real host terminal.
-        environment["TERM_PROGRAM"] = "term-ai-nal"
-        environment["TERM_PROGRAM_VERSION"] = Bundle.main
-            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
-        // Only a fallback: an inherited locale is the user's own choice, but
-        // without any locale tools like vi emit non-UTF-8 sequences.
-        if environment["LANG"] == nil, environment["LC_ALL"] == nil {
-            environment["LANG"] = "en_US.UTF-8"
+        var environment: [String: String] = [
+            "HOME": NSHomeDirectory(),
+            "USER": NSUserName(),
+            "LOGNAME": NSUserName(),
+            "SHELL": loginShell,
+            // A seed only: `path_helper` in /etc/zprofile rebuilds PATH from
+            // /etc/paths and /etc/paths.d, and the user's profile extends it.
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "TMPDIR": NSTemporaryDirectory(),
+            "LANG": preferredLocaleIdentifier(),
+            "TERM": "xterm-256color",
+            "COLORTERM": "truecolor",
+            // Announce ourselves rather than passing on whoever launched us, so
+            // shell configuration can branch on the real host terminal.
+            "TERM_PROGRAM": "term-ai-nal",
+            "TERM_PROGRAM_VERSION": Bundle.main
+                .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev",
+        ]
+        if let socket = ProcessInfo.processInfo.environment["SSH_AUTH_SOCK"] {
+            environment["SSH_AUTH_SOCK"] = socket
         }
         return environment.map { "\($0.key)=\($0.value)" }
     }
 
+    /// The user's locale as a POSIX identifier. With no locale at all, tools
+    /// like vi emit sequences that are not UTF-8 friendly.
+    private static func preferredLocaleIdentifier() -> String {
+        let identifier = Locale.current.identifier
+            .split(separator: "@").first
+            .map(String.init) ?? ""
+        let normalised = identifier.replacingOccurrences(of: "-", with: "_")
+        // Refuse anything that is not a plain language_REGION pair rather than
+        // handing the shell a locale it cannot resolve.
+        let looksPosix = normalised.count >= 5 && normalised.contains("_")
+        return (looksPosix ? normalised : "en_US") + ".UTF-8"
+    }
+
+    /// The user's real login shell, from the passwd record.
+    ///
+    /// Taken from the user record rather than an inherited `SHELL`, which
+    /// describes whichever shell happened to launch the app and was absent
+    /// altogether under a GUI launch — the original cause of the
+    /// `(eval):type: bad option: -t` failure.
     static var loginShell: String {
-        // Respect the user's shell, falling back to zsh as the Electron build did.
-        ProcessInfo.processInfo.environment["SHELL"] ?? "/bin/zsh"
+        if let record = getpwuid(getuid()), let shell = record.pointee.pw_shell {
+            let path = String(cString: shell)
+            if !path.isEmpty, FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return "/bin/zsh"
     }
 
     /// Writes to the PTY. Used by the AI review overlay on Execute and, later,

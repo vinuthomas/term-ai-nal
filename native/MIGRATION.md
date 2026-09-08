@@ -188,20 +188,41 @@ default over what the Electron build actually did:
    tripped Powerlevel10k's instant-prompt warning on every launch. The child now
    inherits the full environment, with TERM/COLORTERM/SHELL set explicitly and
    LANG only as a fallback. Went from 6 variables to 60.
-2. **Inheriting *too much* environment.** The fix above went the other way and
-   handed the child everything, including variables that describe the process
-   which launched the app. Launched from a terminal running Claude Code — which
-   is how it starts during development — every pane inherited that session's
-   markers, so `claude` run inside a pane saw `CLAUDE_CODE_CHILD_SESSION`,
-   concluded it was a nested child and silently stopped saving transcripts.
-   `CLAUDE_CODE_MESSAGING_TOKEN` is a credential besides. Session-scoped
-   variables are now scrubbed: tool markers (prefix `CLAUDE_CODE_`, but *not*
-   `CLAUDE_` — that would take the user's own `CLAUDE_CONFIG_DIR`), the
-   launching terminal's identity (`TERM_SESSION_ID`, `ITERM_*`, `LC_TERMINAL*`,
-   `__CFBundleIdentifier`), Powerlevel10k's per-tty cache, and shell
-   bookkeeping (`SHLVL`, `_`, `OLDPWD`). `TERM_PROGRAM` is set to this app
-   rather than passed on. Terminal.app and iTerm2 never hit this only because
-   they are normally launched from Finder.
+2. **Inheriting the launcher's environment at all.** The fix above went the
+   other way and handed the child everything, including state describing the
+   process that launched the app. Started from a terminal running Claude Code —
+   which is how it launches during development — every pane inherited that
+   session's markers, so `claude` run inside a pane saw
+   `CLAUDE_CODE_CHILD_SESSION`, concluded it was a nested child and silently
+   stopped saving transcripts. `CLAUDE_CODE_MESSAGING_TOKEN` is a credential
+   besides.
+
+   A denylist of known offenders was the obvious next move and the wrong shape.
+   The same class covers Gemini CLI's `GEMINI_CLI`, Codex's `CODEX_SANDBOX`
+   (where a stale value could persuade a tool it is already sandboxed), `TMUX`,
+   `STY`, every host terminal's `GHOSTTY_*` / `KITTY_*` / `WEZTERM_*` /
+   `VSCODE_*`, `TERMINFO`, `SSH_TTY`, `SHLVL`, direnv's bookkeeping — and
+   whatever ships next year. A list that must be complete to be correct will
+   not stay complete.
+
+   So **nothing is inherited**. `childEnvironment` builds from the user record
+   and the system: `HOME`, `USER`, `LOGNAME`, a `PATH` seed, `TMPDIR`, the
+   user's locale, our own `TERM`/`TERM_PROGRAM`, and `SHELL` read from the
+   passwd record rather than an inherited variable. This costs less than it
+   appears to, because the child is a **login** shell — `/etc/zprofile` via
+   `path_helper`, `~/.zprofile` and `~/.zshrc` rebuild PATH and the user's
+   exports regardless. Verified: with fourteen markers planted in the parent,
+   including a `SOME_FUTURE_AGENT_SESSION` no code mentions, none reached the
+   pane; `SHLVL=1`, `TERM_PROGRAM=term-ai-nal`, and `claude`, `gemini`,
+   `ollama`, nvm-managed `node`, `brew` and `swift` all still resolve.
+
+   Two deliberate exceptions. `SSH_AUTH_SOCK` is carried over, because the
+   agent socket comes from the login session, cannot be derived, and losing it
+   breaks commit signing and pushes. And a variable placed in the GUI session
+   with `launchctl setenv`, never exported from a shell profile, will no longer
+   reach a pane — the one real regression, accepted because it buys immunity to
+   an unbounded list.
+
 3. **Dropping the font fallback stack.** `DEFAULT_FONT_FAMILY` in
    `TerminalPane.tsx` listed Nerd Font variants first, and it existed precisely
    for glyph coverage. Falling back to `NSFont.monospacedSystemFont` instead
