@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Term-AI-nal is an AI-powered terminal emulator (primarily macOS, with Windows/Linux packaging targets) built with Electron, React 19, TypeScript, and xterm.js. It runs a real `zsh --login` session via `node-pty` and layers on an AI assistant that translates natural language into shell commands. **Commands are never auto-executed** — the user always reviews them in an overlay first.
+Term-AI-nal is an AI-powered terminal emulator (macOS only) built with Electron, React 19, TypeScript, and xterm.js. It runs a real `zsh --login` session via `node-pty` and layers on an AI assistant that translates natural language into shell commands. **Commands are never auto-executed** — the user always reviews them in an overlay first.
 
 It also exposes a built-in **MCP server** so external AI agents can list panes, read terminal output, stream it live over SSE, and send input.
 
@@ -14,7 +14,7 @@ It also exposes a built-in **MCP server** so external AI agents can list panes, 
 - `npm run build:main` — compile `src/main/*.ts` to `dist/main/` via bare `tsc` CLI flags (this script does **not** use `tsconfig.json`; `tsconfig.json` covers the renderer/Vite side only).
 - `npm run build:renderer` — Vite build to `dist/renderer/`.
 - `npm run start` — build both, then `electron .` (production paths).
-- `npm run dist` / `dist:mac` / `dist:win` / `dist:linux` / `dist:all` — package via electron-builder into `release/`.
+- `npm run dist` / `dist:mac` — package via electron-builder into `release/`. macOS is the only supported target; the Windows and Linux targets were dropped deliberately, and a native Swift rewrite is underway on the `swift-migration` branch (see `native/MIGRATION.md`).
 - `npm run postinstall` — `electron-rebuild`; re-run after changing Electron or `node-pty` versions, otherwise the native PTY module won't load.
 
 There is no test suite, linter, or formatter configured. Verify changes by running the app.

@@ -111,10 +111,11 @@ Ordered roughly by how much they'd be missed.
 ## Known constraints
 
 - **`@Generable` needs Xcode.** The `FoundationModelsMacros` plugin ships with
-  Xcode, not Command Line Tools, so the macro cannot expand here. The schemas
-  are built at runtime with `DynamicGenerationSchema` instead — same guarantee,
-  more verbose. If you install Xcode, `AppleSchemas` could collapse into two
-  `@Generable` structs.
+  Xcode, not Command Line Tools, so the macro cannot expand under a CLT-only
+  toolchain. The schemas are built at runtime with `DynamicGenerationSchema`
+  instead — same guarantee, more verbose. **Xcode is being installed**, so this
+  constraint is temporary: fold `AppleSchemas` into `@Generable` structs once
+  `xcode-select -p` points at Xcode. Keep the build working from the CLI.
 - **Swift 5 language mode.** The target pins `swiftLanguageMode(.v5)`; the
   scaffold has not been audited for Swift 6 strict concurrency. `PaneController`
   and `AppDelegate` are main-actor by convention, not by annotation.
@@ -144,6 +145,11 @@ rough dependency order:
    diagnostics from the Electron `Settings.tsx`), key field writing to
    `KeychainStore`, font, theme, and the MCP section. An `NSTabViewController`
    with three tabs mirrors the existing layout. **Largest single item in Phase 1.**
+
+   Includes **Ollama model discovery**: port the `get-ollama-models` handler
+   (`GET {baseUrl}/api/tags`) so the model field becomes a populated dropdown
+   when Ollama is the provider, as it was in `Settings.tsx`. The inference path
+   itself is already done.
 2. **Verify the AI paths end to end.** Currently unproven. Order: Apple
    on-device (no key needed) → OpenAI-compatible against a local endpoint →
    a real cloud key. Confirm `DynamicGenerationSchema` actually round-trips —
@@ -153,9 +159,9 @@ rough dependency order:
    `TerminalView` takes an `NSFont`; wire it through `TerminalPaneView.init` and
    re-apply on settings change. Small, but it is the first thing you will notice.
 4. **Themes, minus the importer** — port the four palettes from `themes.ts` into
-   a Swift `TerminalTheme` struct and apply via SwiftTerm's colour API. **Skip
-   `parseItermTheme`**; it is a lot of plist handling for a feature used once.
-   Revisit only if you miss it.
+   a Swift `TerminalTheme` struct and apply via SwiftTerm's colour API.
+   `parseItermTheme` is **dropped by decision** — `.itermcolors` import will not
+   be ported, and `customTheme`/`customThemeName` stay out of `AppSettings`.
 5. **Session restore** — `session.json`, layout + cwd persistence, and the
    `before-quit` cwd refresh. `PaneNode` is already tree-shaped and
    `ProcessCwd.lookup` already works, so this is mostly `Codable` on the tree
@@ -177,9 +183,9 @@ Small, mechanical, and each one is a thing an existing user would notice missing
   it. Needs a rename affordance (double-click a pane header, or a menu item).
 - **Hidden panes.** Re-introduce the explicit "not visible to MCP" concept, or
   decide the `panesProvider` omission is enough and delete the idea.
-- **Anthropic and Gemini providers** — or **decide to drop them.** Worth asking
-  whether five providers was ever right, now that the Apple path is free and
-  keyless and `baseUrl` covers anything OpenAI-shaped.
+- **Anthropic and Gemini providers** — the only two unported, and still an open
+  call. Apple, OpenAI, Perplexity and Ollama all work. Ollama is explicitly
+  staying.
 - **Follow-up refinement** in the AI palette.
 
 ### Phase 3 — The part that justifies the rewrite
@@ -228,21 +234,25 @@ than a nicer Electron app. Everything here is new capability, not a port.
   file (but *not* the sandbox — the child shell needs full access), and
   `notarytool`.
 - **Updates.** Sparkle, or whatever replaces the current GitHub-release flow.
-- **Retire `src/`** once Phase 1 holds, or keep Electron as the
-  Windows/Linux target and accept the divergence.
+- **Retire `src/`** once Phase 1 holds. There is no cross-platform reason to
+  keep it: the Windows and Linux packaging targets have been removed from
+  `package.json`, so Electron has no remaining role once the native app is
+  dogfoodable.
 
-### Decisions needed from you
+### Decisions taken
 
-These change the plan rather than just its order:
-
-1. **Install Xcode?** It buys `@Generable` (collapsing `AppleSchemas` to two
-   annotated structs), Instruments, and the visual debugger. Costs ~10GB and
-   makes the build depend on it. Currently everything works without it.
-2. **Keep Windows/Linux?** Going native forecloses them. If they were real
-   ambitions, Phase 3 belongs in Tauri instead; if aspirational, say so and
-   delete the `dist:win`/`dist:linux` scripts.
-3. **Five AI providers, or two?** See Phase 2.
-4. **Themes: port or drop?** Phase 1 assumes the four built-ins and no importer.
+1. **Xcode: install it.** Once present, `AppleSchemas`' runtime
+   `DynamicGenerationSchema` construction collapses into two `@Generable`
+   structs, and Instruments becomes available for the latency work in Phase 3.
+   The SPM layout stays as-is — Xcode opens `native/Package.swift` directly, so
+   no `.xcodeproj` is needed and the CLI build keeps working.
+2. **Windows and Linux: dropped.** The `win`, `linux` and `nsis` electron-builder
+   targets and the `dist:win`/`dist:linux`/`dist:all` scripts are removed;
+   `dist` now builds macOS only. Native Swift is therefore the right target, and
+   the Tauri alternative is off the table.
+3. **Providers: Ollama stays.** Anthropic and Gemini remain unported and
+   undecided.
+4. **iTerm theme import: dropped.** Built-in themes only.
 
 ### Suggested order
 
