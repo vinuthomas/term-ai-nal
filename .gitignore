@@ -43,3 +43,9 @@ tsconfig.tsbuildinfo
 out/
 .electron-builder.yaml
 node_modules
+
+# Swift / SPM (native target)
+native/.build/
+native/build/
+*.xcodeproj
+*.xcworkspace
