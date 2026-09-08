@@ -119,10 +119,12 @@ final class AccordionHeader: NSView {
         // hint keep their widths on hover — text that reflows under the cursor
         // reads as a glitch.
         NSLayoutConstraint.activate([
-            accentEdge.leadingAnchor.constraint(equalTo: leadingAnchor),
-            accentEdge.topAnchor.constraint(equalTo: topAnchor),
-            accentEdge.bottomAnchor.constraint(equalTo: bottomAnchor),
-            accentEdge.widthAnchor.constraint(equalToConstant: 2),
+            // Inset inside the rounded corners, or the clip eats its ends and
+            // it reads as a rendering artefact instead of an indicator.
+            accentEdge.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 3),
+            accentEdge.topAnchor.constraint(equalTo: topAnchor, constant: 4),
+            accentEdge.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -4),
+            accentEdge.widthAnchor.constraint(equalToConstant: 3),
 
             chevron.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
             chevron.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -169,9 +171,17 @@ final class AccordionHeader: NSView {
         // fill, the leading accent edge, and full-strength text.
         let fill = isExpanded ? palette.expandedFill : (isHovered ? palette.hoverFill : palette.collapsedFill)
         layer?.backgroundColor = fill.cgColor
+        // Rounded and outlined so a row reads as a panel rather than a bar.
+        // Full-width, square rows were indistinguishable from the tab bar above
+        // and looked like a status bar below.
+        layer?.cornerRadius = 5
+        layer?.borderWidth = 1
+        layer?.borderColor = (isExpanded ? palette.accent : palette.separator).cgColor
         accentEdge.layer?.backgroundColor = palette.accent.cgColor
+        accentEdge.layer?.cornerRadius = 1.5
         accentEdge.isHidden = !isExpanded
-        bottomSeparator.layer?.backgroundColor = palette.separator.cgColor
+        // Redundant now the rows are separated panels with their own outline.
+        bottomSeparator.isHidden = true
 
         let symbol = isExpanded ? "chevron.down" : "chevron.right"
         chevron.image = NSImage(systemSymbolName: symbol, accessibilityDescription: isExpanded ? "Expanded" : "Collapsed")?

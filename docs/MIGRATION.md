@@ -416,6 +416,14 @@ Two consequences worth knowing:
   That is the second time this exact padding has been absent, so
   `--check-accordion` now asserts the expanded terminal is inset from both
   container edges rather than leaving it to the eye.
+- **Edge-to-edge rows read as chrome, not content.** The first version spanned
+  the full width with square corners, which made an expanded header
+  indistinguishable from the tab bar directly above it and a collapsed one look
+  like a status bar. Rows are now inset horizontally by the same amount as the
+  terminal, separated by a gap, rounded and outlined — so the stack reads as
+  panels sitting *in* the content area. The expanded row takes the accent colour
+  for its outline as well as its leading stripe, and the stripe is inset inside
+  the corner radius so the clip does not eat its ends.
 - **Layout is frame-based, so resize has to be observed.** The heights are one
   expression and the views are reparented constantly, which Auto Layout handles
   poorly; `AccordionContainerView.layout()` calls back into `layoutAccordion()`.

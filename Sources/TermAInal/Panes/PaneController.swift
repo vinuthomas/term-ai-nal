@@ -220,26 +220,42 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
     /// it went missing in that rewrite. `--check-accordion` asserts it now.
     static let terminalInset = NSSize(width: 8, height: 6)
 
+    /// Gap between accordion rows.
+    ///
+    /// Rows are inset horizontally by the same amount as the terminal and
+    /// separated vertically, so the stack reads as panels sitting *in* the
+    /// tab's content area. Spanning the full width made an expanded header
+    /// indistinguishable from the tab bar directly above it and a collapsed one
+    /// look like a status bar — edge-to-edge is what chrome does.
+    static let rowGap: CGFloat = 4
+
     /// Called by the host on resize, and after any rebuild.
     func layoutAccordion() {
         let bounds = containerView.bounds
         guard bounds.height > 0 else { return }
 
         let headerHeight = AccordionHeader.height
-        let collapsedCount = max(0, panes.count - 1)
         // A single pane needs no header at all — one row of chrome describing
         // the only thing on screen is pure noise.
         let showHeaders = panes.count > 1
-        let chrome = showHeaders ? headerHeight * CGFloat(panes.count) : 0
+        let inset = Self.terminalInset
+        let gap = Self.rowGap
+        let chrome = showHeaders
+            ? (headerHeight + gap) * CGFloat(panes.count) + gap
+            : 0
         let terminalHeight = max(0, bounds.height - chrome)
-        _ = collapsedCount
 
         var y = bounds.maxY
         for (index, pane) in panes.enumerated() {
             if showHeaders {
-                y -= headerHeight
+                y -= gap + headerHeight
                 headers[pane.paneId]?.isHidden = false
-                headers[pane.paneId]?.frame = NSRect(x: 0, y: y, width: bounds.width, height: headerHeight)
+                headers[pane.paneId]?.frame = NSRect(
+                    x: inset.width,
+                    y: y,
+                    width: max(0, bounds.width - inset.width * 2),
+                    height: headerHeight
+                )
             } else {
                 headers[pane.paneId]?.isHidden = true
             }
@@ -247,12 +263,15 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
                 // The row still consumes the full height; only the terminal
                 // inside it is inset, so the stacking arithmetic is unaffected.
                 y -= terminalHeight
-                let inset = Self.terminalInset
+                // With headers shown the row gaps already separate things, so
+                // the terminal only needs its own vertical inset when it is
+                // alone in the tab.
+                let vertical = showHeaders ? 0 : inset.height
                 terminal.frame = NSRect(
                     x: inset.width,
-                    y: y + inset.height,
+                    y: y + vertical,
                     width: max(0, bounds.width - inset.width * 2),
-                    height: max(0, terminalHeight - inset.height * 2)
+                    height: max(0, terminalHeight - vertical * 2)
                 )
             }
         }
