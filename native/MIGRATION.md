@@ -318,6 +318,30 @@ Positions can only be set once the split itself has a width, hence `layout()`
 rather than construction. Measured after the fix: child widths `[599, 599]`,
 spread 0.
 
+### One command palette, with a visible way in
+
+The Electron build had a command palette *and* a separate task planner on two
+shortcuts. That asked the user to classify their own request before making it,
+and the classification was wrong either way: "create a repo and commit" is one
+request whether it takes one command or four.
+
+There is now one palette and no mode. It always asks for a plan and renders a
+one-step plan as a single command, so the model decides how many commands the
+request needs. Measured: "list files sorted by size" comes back as one step and
+renders as a single command; "create a git repo and make an initial empty
+commit" comes back as three and renders as a numbered list.
+
+The opener is an `NSTitlebarAccessoryViewController` button, deliberately in the
+titlebar rather than the tab bar — the tab bar hides itself at one tab, which is
+most of the time, so a button there would disappear exactly when someone went
+looking for it. `Cmd+Shift+P` still works as an accelerator, and `Cmd+Shift+M`
+is gone with the planner.
+
+`AIProvider.suggestCommand` is no longer used by the UI but is kept and still
+exercised by `--check-ai`: it is the only coverage of the plain-object guided
+generation path, where `plan` uses the array-of-references schema that is the
+least certain code in the tree.
+
 ### Where a new shell starts
 
 `newPaneDirectory` is `inherit` (default), `home`, or `custom` with

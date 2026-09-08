@@ -125,12 +125,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         ])
         window.contentView = content
         window.delegate = self
+        installPaletteButton()
         window.center()
         window.makeKeyAndOrderFront(nil)
 
         if settings.assistantEnabled {
             setSidebarVisible(true, byUser: false)
         }
+    }
+
+    /// Puts a permanent Command Palette button in the titlebar.
+    ///
+    /// Deliberately the titlebar and not the tab bar: the tab bar hides itself
+    /// when there is only one tab, which is most of the time, so a button there
+    /// would vanish exactly when someone is looking for it. A menu item and a
+    /// shortcut are not discoverability — you have to already know the feature
+    /// exists to find either.
+    private func installPaletteButton() {
+        let button = NSButton(title: "Command Palette", target: self, action: #selector(openAIPalette))
+        button.bezelStyle = .accessoryBarAction
+        button.controlSize = .small
+        button.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: nil)
+        button.imagePosition = .imageLeading
+        button.toolTip = "Describe what you want to do (\u{2318}\u{21E7}P)"
+        button.translatesAutoresizingMaskIntoConstraints = false
+
+        let container = NSView()
+        container.addSubview(button)
+        NSLayoutConstraint.activate([
+            button.leadingAnchor.constraint(equalTo: container.leadingAnchor),
+            button.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -10),
+            button.centerYAnchor.constraint(equalTo: container.centerYAnchor),
+            container.heightAnchor.constraint(equalToConstant: 28),
+        ])
+
+        let accessory = NSTitlebarAccessoryViewController()
+        accessory.view = container
+        accessory.layoutAttribute = .right
+        window.addTitlebarAccessoryViewController(accessory)
     }
 
     // MARK: - Assistant sidebar
@@ -309,7 +341,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let aiMenuItem = NSMenuItem()
         let aiMenu = NSMenu(title: "AI")
         addItem(to: aiMenu, "Command Palette…", #selector(openAIPalette), "p", [.command, .shift])
-        addItem(to: aiMenu, "Task Planner…", #selector(openTaskPlanner), "m", [.command, .shift])
         aiMenu.addItem(.separator())
         addItem(to: aiMenu, "Toggle Assistant Sidebar", #selector(toggleAssistant), "a", [.command, .shift])
         aiMenuItem.submenu = aiMenu
@@ -403,16 +434,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func openAIPalette() {
-        presentPalette(mode: .command)
-    }
-
-    @objc private func openTaskPlanner() {
-        presentPalette(mode: .plan)
-    }
-
-    private func presentPalette(mode: AIPaletteController.Mode) {
         let cwd = panes?.activeTerminal?.currentCwd
-        let controller = AIPaletteController(mode: mode, cwd: cwd) { [weak self] command in
+        let controller = AIPaletteController(cwd: cwd) { [weak self] command in
             // Never auto-executed: this only runs after the user hits Execute in
             // the review sheet. Same invariant as the Electron overlay.
             self?.panes?.activeTerminal?.sendToShell(command + "\n")

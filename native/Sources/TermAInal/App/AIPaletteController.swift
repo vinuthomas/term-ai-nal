@@ -7,12 +7,14 @@ import AppKit
 /// executed on the user's behalf. Generation fills in the review area; only the
 /// explicit Execute button hands anything to the shell.
 final class AIPaletteController: NSObject {
-    enum Mode {
-        case command
-        case plan
-    }
-
-    private let mode: Mode
+    /// There is no longer a mode.
+    ///
+    /// The Electron build had a command palette and a separate task planner,
+    /// which asked the user to classify their own request before making it —
+    /// and got it wrong either way, since "create a repo and commit" is one
+    /// request whether it takes one command or four. The palette now always
+    /// asks for a plan and renders a single step as a single command, so the
+    /// model decides how many commands the request needs.
     private let cwd: String?
     private let onExecute: (String) -> Void
 
@@ -29,8 +31,7 @@ final class AIPaletteController: NSObject {
     /// Commands currently staged for execution; a plan may hold several.
     private var stagedCommands: [String] = []
 
-    init(mode: Mode, cwd: String?, onExecute: @escaping (String) -> Void) {
-        self.mode = mode
+    init(cwd: String?, onExecute: @escaping (String) -> Void) {
         self.cwd = cwd
         self.onExecute = onExecute
         super.init()
@@ -46,7 +47,7 @@ final class AIPaletteController: NSObject {
             backing: .buffered,
             defer: false
         )
-        panel.title = mode == .command ? "AI Command Palette" : "AI Task Planner"
+        panel.title = "Command Palette"
         panel.contentView = buildContentView()
         parent.beginSheet(panel, completionHandler: nil)
         panel.makeFirstResponder(input)
@@ -60,9 +61,7 @@ final class AIPaletteController: NSObject {
     private func buildContentView() -> NSView {
         let container = NSView()
 
-        input.placeholderString = mode == .command
-            ? "Describe the command you want…"
-            : "Describe the task to break into steps…"
+        input.placeholderString = "Describe what you want to do…"
         input.font = .systemFont(ofSize: 13)
         input.target = self
         input.action = #selector(generate)
@@ -137,7 +136,7 @@ final class AIPaletteController: NSObject {
         guard !request.isEmpty else { return }
 
         guard let provider = AIService.provider(for: SettingsStore.shared.settings.commandProfile) else {
-            showError("No AI provider configured. Set `provider` in settings.json.")
+            showError("No AI provider configured. Choose one in Settings.")
             return
         }
 
@@ -148,15 +147,18 @@ final class AIPaletteController: NSObject {
         Task { @MainActor in
             defer { setLoading(false) }
             do {
-                switch mode {
-                case .command:
-                    let suggestion = try await provider.suggestCommand(request: request, cwd: cwd)
-                    stagedCommands = [suggestion.command]
-                    resultView.string = suggestion.command
-                    explanationLabel.stringValue = suggestion.explanation
-                case .plan:
-                    let steps = try await provider.plan(goal: request, cwd: cwd ?? FileManager.default.currentDirectoryPath)
-                    stagedCommands = steps.map(\.cmd)
+                let steps = try await provider.plan(
+                    goal: request,
+                    cwd: cwd ?? FileManager.default.currentDirectoryPath
+                )
+                stagedCommands = steps.map(\.cmd)
+
+                // A one-step plan is a single command and is shown as one:
+                // numbering a list of one, or captioning it "step 1", is noise.
+                if steps.count == 1, let only = steps.first {
+                    resultView.string = only.cmd
+                    explanationLabel.stringValue = only.explanation
+                } else {
                     resultView.string = steps.enumerated()
                         .map { "\($0.offset + 1). \($0.element.cmd)" }
                         .joined(separator: "\n")
