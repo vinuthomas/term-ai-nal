@@ -317,6 +317,48 @@ Two provider-specific traps:
   no text at all when `finishReason` is `SAFETY` or `MAX_TOKENS`; that is
   Gemini's refusal shape and produces a clear error rather than an empty string.
 
+### `open_terminal`, and why it is one tool
+
+MCP can open terminals. It is deliberately **one** tool with a defaulted
+`scope`, not an `open_pane` and an `open_tab`: two tools are picked by name
+recognition, and the one an agent should reach for less often would get equal
+billing. One tool makes `scope: "pane"` the path of least resistance and puts
+the whole policy in a single description.
+
+The policy cannot be enforced — only the caller knows whether two shells belong
+to the same piece of work — so it is expressed where the model reads it, and the
+default carries the rest. `purpose` is required for the same reason: an agent
+that has to name what a terminal is for makes a better pane-versus-tab choice
+than one that does not, and the answer becomes the label, which finally fills
+the `PaneNode.label` gap that had been plumbed through to MCP with nothing
+setting it.
+
+The accordion changes the argument for panes. Under splits, "same task" meant
+"visible side by side"; with an accordion only the expanded pane is visible, so
+a pane **groups** shells rather than showing two at once. The description says
+so, because an agent reasoning from a split-pane prior would otherwise put
+output somewhere the user cannot see.
+
+Three decisions the server does not make, because `MCPServer` never reads UI
+state and takes its policy injected:
+
+- **`focus` defaults to false.** An agent opening a terminal should not yank the
+  user's view. The reply says the terminal is not visible, so the agent can
+  mention it rather than assume it was seen.
+- **A ceiling of 24 terminals.** This is the first tool that changes the
+  window's structure rather than reading it or typing into it; a looping agent
+  would otherwise spawn shells until the machine complained. Verified by
+  lowering the cap and watching four consecutive refusals.
+- **An unusable `cwd` falls back** to the app's new-terminal preference and says
+  so, rather than failing the call or dumping the shell at `/`.
+
+A collapsed pane is a live shell — verified by sending a command to one opened
+without focus and reading its output back.
+
+Gated by `mcpFeatures.openTerminal`, default on, consistent with
+`sendInputToTerminal`, which is the more dangerous capability of the two since
+it runs commands in a shell the user is already using.
+
 ### Verifying providers nobody has keys for
 
 `Scripts/mock-ai-api.py` plus `--check-cloud` is the only coverage these have. A

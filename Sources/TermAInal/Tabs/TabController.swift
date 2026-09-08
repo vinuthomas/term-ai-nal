@@ -205,6 +205,20 @@ final class TabController: NSObject, TabBarViewDelegate {
         }
     }
 
+    /// Opens a tab for an external caller, returning its pane id.
+    @discardableResult
+    func addLabelledTab(purpose: String, cwd: String?, focus: Bool) -> String {
+        let previous = selectedIndex
+        let tab = addTab(cwd: NewPaneDirectory.resolve(inheriting: cwd ?? activePanes?.activeTerminal?.currentCwd))
+        tab.title = purpose
+        tab.panes.panes.first?.label = purpose
+        tabBar.setTabs(tabs.map(\.title), selected: selectedIndex)
+        if !focus, tabs.indices.contains(previous) {
+            selectTab(at: previous)
+        }
+        return tab.panes.activePaneId
+    }
+
     func selectTab(at index: Int) {
         guard tabs.indices.contains(index), index != selectedIndex else { return }
         selectedIndex = index

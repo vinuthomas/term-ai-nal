@@ -104,6 +104,33 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
 
     // MARK: - Mutations
 
+    /// Adds a labelled pane, optionally without expanding it.
+    ///
+    /// An agent opening a pane should not yank the user's view by default, so
+    /// `focus` is explicit. The pane still runs; it is simply collapsed until
+    /// someone expands it.
+    @discardableResult
+    func addPane(purpose: String?, cwd: String?, focus: Bool) -> String {
+        let previous = expandedIndex
+        let resolved = NewPaneDirectory.resolve(inheriting: cwd ?? activeTerminal?.currentCwd)
+        let insertAt = min(expandedIndex + 1, panes.count)
+        let pane = TerminalPaneModel(paneId: Self.newPaneId(), cwd: resolved, label: purpose)
+        panes.insert(pane, at: insertAt)
+
+        // The terminal is only built for the expanded row, so a pane opened
+        // without focus has to be expanded briefly to start its shell — then
+        // the previous selection is restored.
+        expandedIndex = insertAt
+        rebuild()
+        if !focus {
+            expandedIndex = previous >= insertAt ? previous + 1 : previous
+            rebuild()
+        }
+        onActivePaneChange?(activePaneId)
+        onTitleChange?(displayTitle)
+        return pane.paneId
+    }
+
     /// Adds a pane below the expanded one and expands it.
     func addPane() {
         let inherited = NewPaneDirectory.resolve(

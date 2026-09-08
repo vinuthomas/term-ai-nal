@@ -7,17 +7,22 @@ struct MCPFeatures: Codable {
     var getTerminalOutput: Bool = true
     var getActiveTerminalOutput: Bool = true
     var sendInputToTerminal: Bool = true
+    /// Gates `open_terminal`. The first tool that changes the window's
+    /// structure rather than reading it or typing into it.
+    var openTerminal: Bool = true
 
     init(
         listTerminals: Bool = true,
         getTerminalOutput: Bool = true,
         getActiveTerminalOutput: Bool = true,
-        sendInputToTerminal: Bool = true
+        sendInputToTerminal: Bool = true,
+        openTerminal: Bool = true
     ) {
         self.listTerminals = listTerminals
         self.getTerminalOutput = getTerminalOutput
         self.getActiveTerminalOutput = getActiveTerminalOutput
         self.sendInputToTerminal = sendInputToTerminal
+        self.openTerminal = openTerminal
     }
 
     init(from decoder: Decoder) throws {
@@ -27,6 +32,7 @@ struct MCPFeatures: Codable {
         getTerminalOutput = try c.decodeIfPresent(Bool.self, forKey: .getTerminalOutput) ?? d.getTerminalOutput
         getActiveTerminalOutput = try c.decodeIfPresent(Bool.self, forKey: .getActiveTerminalOutput) ?? d.getActiveTerminalOutput
         sendInputToTerminal = try c.decodeIfPresent(Bool.self, forKey: .sendInputToTerminal) ?? d.sendInputToTerminal
+        openTerminal = try c.decodeIfPresent(Bool.self, forKey: .openTerminal) ?? d.openTerminal
     }
 }
 

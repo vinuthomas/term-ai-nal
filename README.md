@@ -231,6 +231,25 @@ the server executes anything a local client asks for, which is why it is worth
 turning off if you do not need it. And changing the port in Settings does not
 yet restart the server — `MCPServer` is immutable per port.
 
+### `open_terminal`
+
+Agents can open terminals. One tool with a defaulted `scope`, because the policy
+is "prefer a pane" and two tools would give the less-preferred one equal
+billing:
+
+| argument | |
+|---|---|
+| `purpose` | **required** — what the terminal is for; becomes its label |
+| `scope` | `pane` (default) or `tab` |
+| `cwd` | optional; an unusable path falls back to the app's preference |
+| `focus` | default `false`, so the user's view is not moved |
+
+A pane groups shells belonging to one piece of work; a tab is for separate work.
+Note that with the accordion only the expanded pane is visible, so a pane groups
+rather than showing two at once — a terminal opened without `focus` runs, but is
+collapsed until someone expands it. Capped at 24 terminals, since each is a live
+shell. Gated by `mcpFeatures.openTerminal`.
+
 ## Bundled font
 
 `Resources/Fonts/` ships four faces of **JetBrainsMonoNL Nerd Font Mono**
