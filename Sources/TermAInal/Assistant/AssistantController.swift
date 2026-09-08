@@ -106,7 +106,12 @@ final class AssistantController: NSObject, AssistantSidebarDelegate {
     // MARK: - Questions
 
     private func ask(_ question: String, context: String) {
-        guard let provider = AIService.provider(for: SettingsStore.shared.settings.insightProfile) else {
+        // `commandProfile` — otherwise unused since the command palette that
+        // originally drove it was removed — now serves interactive chat
+        // (free-form questions and Explain Last); `insightProfile` stays
+        // dedicated to the automatic post-command commentary in
+        // `requestInsight`, which nobody asked for and should stay cheap.
+        guard let provider = AIService.provider(for: SettingsStore.shared.settings.commandProfile) else {
             sidebar.appendError("No AI provider configured. Open Settings to pick one.")
             return
         }

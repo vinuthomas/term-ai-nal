@@ -46,10 +46,19 @@ final class MCPServer {
     /// The server stays out of it, as with every other capability here.
     var openTerminal: ((_ scope: String, _ purpose: String, _ cwd: String?, _ focus: Bool) -> String)?
 
+    /// Asks the app to show an approve/deny sheet before `send_input_to_terminal`
+    /// reaches the shell. Only consulted when `requireInputConfirmation` is on.
+    /// The HTTP request simply stays open until `completion` fires — nothing on
+    /// `queue` blocks while it waits, so other connections and heartbeats are
+    /// unaffected.
+    var confirmSendInput: ((_ paneId: String, _ text: String, _ completion: @escaping (Bool) -> Void) -> Void)?
+
     // MARK: - Configuration
 
     private let port: Int
     private let features: MCPFeatures
+    private let authToken: String
+    private let requireInputConfirmation: Bool
 
     // MARK: - Mutable state, guarded by `queue`
 
@@ -64,9 +73,11 @@ final class MCPServer {
     /// without ever asking the UI for history it does not keep.
     private var lastAnnouncedActivePaneId: String?
 
-    init(port: Int, features: MCPFeatures) {
+    init(port: Int, features: MCPFeatures, authToken: String, requireInputConfirmation: Bool = false) {
         self.port = port
         self.features = features
+        self.authToken = authToken
+        self.requireInputConfirmation = requireInputConfirmation
     }
 
     // MARK: - Lifecycle
@@ -193,9 +204,18 @@ final class MCPServer {
     // mutation below already run serialized on it — no extra locking needed.
 
     private func route(_ request: HTTPRequest, on connection: NWConnection) {
-        // Browsers preflight local fetches; mirror the Electron CORS behaviour.
         if request.method == "OPTIONS" {
+            // No CORS headers are sent (see respondRaw), so this satisfies
+            // nothing a browser needs — a web page was never a legitimate MCP
+            // client. Answered only so a stray preflight gets a clean 204
+            // instead of falling through to 404.
             respondRaw(connection, status: 204, headers: [:], body: Data(), keepAlive: false)
+            return
+        }
+
+        guard isAuthorized(request) else {
+            MCPAuditLog.record("auth_failed path=\(request.path)")
+            respond(connection, status: 401, json: .object(["error": .string("Unauthorized")]))
             return
         }
 
@@ -215,6 +235,18 @@ final class MCPServer {
         }
 
         respond(connection, status: 404, json: .object(["error": .string("Not found")]))
+    }
+
+    /// Every route but `OPTIONS` requires `Authorization: Bearer <token>`.
+    ///
+    /// Loopback binding alone is not enough: without this, any process on the
+    /// machine — including JavaScript in a browser tab, since responses used
+    /// to carry `Access-Control-Allow-Origin: *` — could call
+    /// `send_input_to_terminal` with zero interaction from the user. A shared
+    /// secret the real MCP client has to be configured with closes that off.
+    private func isAuthorized(_ request: HTTPRequest) -> Bool {
+        guard let header = request.headers["authorization"] else { return false }
+        return header == "Bearer \(authToken)"
     }
 
     private func serverInfo() -> JSONValue {
@@ -281,14 +313,27 @@ final class MCPServer {
                 return
             }
             guard let tool = MCPTool.all.first(where: { $0.name == name }) else {
+                MCPAuditLog.record("unknown_tool name=\(name)")
                 rpcError(-32602, "Unknown tool: \(name)")
                 return
             }
             guard features.isEnabled(tool.featureKey) else {
+                MCPAuditLog.record("disabled_tool name=\(name)")
                 rpcError(-32602, "Tool '\(name)' is disabled.")
                 return
             }
             let args = params["arguments"] as? [String: Any] ?? [:]
+
+            if name == "send_input_to_terminal", requireInputConfirmation, let confirmSendInput {
+                handleSendInputWithConfirmation(args, confirmSendInput: confirmSendInput) { text in
+                    result(.object(["content": .array([.object([
+                        "type": .string("text"), "text": .string(text),
+                    ])])]))
+                }
+                return
+            }
+
+            logToolCall(name, args)
             let text = handleToolCallLocked(tool.name, args)
             result(.object(["content": .array([.object([
                 "type": .string("text"), "text": .string(text),
@@ -417,6 +462,79 @@ final class MCPServer {
         }
     }
 
+    /// Validates args the same way the synchronous `send_input_to_terminal`
+    /// branch above does, then asks the app to show an approve/deny sheet
+    /// before anything reaches the shell. `completion` carries the same
+    /// human-readable text the synchronous path would have returned, and
+    /// fires back on `queue` — nothing blocks while the sheet is up.
+    private func handleSendInputWithConfirmation(
+        _ args: [String: Any],
+        confirmSendInput: @escaping (String, String, @escaping (Bool) -> Void) -> Void,
+        completion: @escaping (String) -> Void
+    ) {
+        guard let id = args["terminal_id"] as? String, !id.isEmpty else {
+            completion("Error: Missing required argument 'terminal_id'.")
+            return
+        }
+        guard let text = args["text"] else {
+            completion("Error: Missing required argument 'text'.")
+            return
+        }
+        guard let string = text as? String else {
+            completion("Error: Argument 'text' must be a string.")
+            return
+        }
+        let panes = panesProvider?() ?? []
+        guard panes.contains(where: { $0.paneId == id }) else {
+            completion("Error: Terminal '\(id)' not found. Use list_terminals to see available terminals.")
+            return
+        }
+
+        MCPAuditLog.record("tool=send_input_to_terminal pane=\(id) text=\(Self.auditEscape(string)) awaiting_confirmation=true")
+        confirmSendInput(id, string) { [weak self] approved in
+            guard let self else { return }
+            self.queue.async {
+                guard approved else {
+                    MCPAuditLog.record("tool=send_input_to_terminal pane=\(id) denied=true")
+                    completion("Denied by user.")
+                    return
+                }
+                guard self.sendInput?(id, string) == true else {
+                    completion("Error: Terminal '\(id)' not found. Use list_terminals to see available terminals.")
+                    return
+                }
+                MCPAuditLog.record("tool=send_input_to_terminal pane=\(id) approved=true")
+                completion("Sent \(string.count) characters to terminal '\(id)'.")
+            }
+        }
+    }
+
+    /// One line per tool call. `send_input_to_terminal` and `open_terminal`
+    /// carry their payload — that is the whole point of an audit log — the
+    /// read-only tools just note what was asked, since their output already
+    /// lives in `OutputBuffer`.
+    private func logToolCall(_ name: String, _ args: [String: Any]) {
+        var parts = ["tool=\(name)"]
+        if let id = args["terminal_id"] as? String, !id.isEmpty {
+            parts.append("pane=\(id)")
+        }
+        if name == "send_input_to_terminal", let text = args["text"] as? String {
+            parts.append("text=\(Self.auditEscape(text))")
+        }
+        if name == "open_terminal", let purpose = args["purpose"] as? String {
+            parts.append("purpose=\(Self.auditEscape(purpose))")
+        }
+        MCPAuditLog.record(parts.joined(separator: " "))
+    }
+
+    private static func auditEscape(_ text: String) -> String {
+        let escaped = text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        return "\"\(escaped)\""
+    }
+
     // MARK: - SSE
 
     private func handleStream(_ request: HTTPRequest, on connection: NWConnection) {
@@ -535,10 +653,10 @@ final class MCPServer {
         body: Data,
         keepAlive: Bool
     ) {
+        // Deliberately no Access-Control-Allow-* headers: an MCP client is a
+        // local agent process, never a browser tab, and CORS is the mechanism
+        // that would let one read this response.
         var head = "HTTP/1.1 \(status) \(Self.reasonPhrase(status))\r\n"
-        head += "Access-Control-Allow-Origin: *\r\n"
-        head += "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-        head += "Access-Control-Allow-Headers: Content-Type, Accept\r\n"
         for (key, value) in headers { head += "\(key): \(value)\r\n" }
         if keepAlive {
             // SSE bodies are open-ended, so no Content-Length.
@@ -559,6 +677,7 @@ final class MCPServer {
         case 200: return "OK"
         case 204: return "No Content"
         case 400: return "Bad Request"
+        case 401: return "Unauthorized"
         case 403: return "Forbidden"
         case 404: return "Not Found"
         default: return "Error"

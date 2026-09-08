@@ -29,6 +29,10 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
     var onEmpty: (() -> Void)?
 
     private var headers: [String: AccordionHeader] = [:]
+    /// Pane ids MCP has sent input to since the user last viewed them. Purely
+    /// a badge-state concern, kept out of `TerminalPaneModel` so it never
+    /// touches session persistence or `--check-accordion`'s round-trip.
+    private var agentActivityPaneIds: Set<String> = []
 
     // MARK: - Identity
 
@@ -177,11 +181,17 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
         terminals.removeValue(forKey: paneId)
         headers[paneId]?.removeFromSuperview()
         headers.removeValue(forKey: paneId)
+        agentActivityPaneIds.remove(paneId)
         OutputBuffer.shared.cleanup(paneId: paneId)
         CommandLog.shared.clear(paneId: paneId)
     }
 
     func expandPane(at index: Int) {
+        // Expanding a pane is the user looking at it, whether or not it was
+        // already expanded, so any agent-activity badge clears either way.
+        if panes.indices.contains(index) {
+            clearAgentActivity(paneId: panes[index].paneId)
+        }
         guard panes.indices.contains(index), index != expandedIndex else {
             focusExpanded()
             return
@@ -190,6 +200,19 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
         rebuild()
         onActivePaneChange?(activePaneId)
         onTitleChange?(displayTitle)
+    }
+
+    /// Marks a pane as driven by an external agent since it was last viewed —
+    /// the only on-screen sign of that for a pane collapsed in this accordion
+    /// or sitting in a background tab.
+    func flagAgentActivity(paneId: String) {
+        agentActivityPaneIds.insert(paneId)
+        headers[paneId]?.hasAgentActivity = true
+    }
+
+    private func clearAgentActivity(paneId: String) {
+        guard agentActivityPaneIds.remove(paneId) != nil else { return }
+        headers[paneId]?.hasAgentActivity = false
     }
 
     /// `Cmd+Alt+1`…`9`.
@@ -217,6 +240,7 @@ final class PaneController: NSObject, AccordionHeaderDelegate {
             header.isExpanded = index == expandedIndex
             header.title = headerTitle(for: pane)
             header.shortcutHint = index < 9 ? "\u{2318}\u{2325}\(index + 1)" : nil
+            header.hasAgentActivity = agentActivityPaneIds.contains(pane.paneId)
             containerView.addSubview(header)
 
             let terminal = self.terminal(for: pane)

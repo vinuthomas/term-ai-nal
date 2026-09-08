@@ -268,14 +268,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let settings = SettingsStore.shared.settings
         guard settings.mcpEnabled else { return }
 
-        let server = MCPServer(port: settings.mcpPort, features: settings.mcpFeatures)
+        let server = MCPServer(
+            port: settings.mcpPort,
+            features: settings.mcpFeatures,
+            authToken: SettingsStore.shared.mcpAuthToken,
+            requireInputConfirmation: settings.mcpRequireConfirmationForInput
+        )
 
         // Metadata is injected, never read from the UI directly — the same
         // separation the Electron build enforced with its `mcp-set-*` IPC push.
         server.panesProvider = { [weak self] in
             guard let self else { return [] }
             // Every tab, not just the visible one: a shell in a background tab
-            // is still live and an agent may be driving it.
+            // is still live and an agent may be driving it. Numbering runs
+            // across all of them regardless of the restriction below, so a
+            // pane's number does not change depending on the setting.
             var infos: [MCPPaneInfo] = []
             var number = 1
             for tab in self.tabs.tabs {
@@ -289,7 +296,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
                     number += 1
                 }
             }
-            return infos
+            guard SettingsStore.shared.settings.mcpRestrictToVisiblePane else { return infos }
+            // Every other tool already gates on membership in this list (see
+            // `visible(_:)` in MCPServer), so filtering it here is the whole
+            // mechanism — nothing else needs to know the restriction exists.
+            guard let activeId = self.tabs.activePaneId else { return [] }
+            return infos.filter { $0.paneId == activeId }
         }
         server.activePaneIdProvider = { [weak self] in self?.tabs.activePaneId }
         server.readBuffer = { paneId, maxLines in
@@ -346,10 +358,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
 
         server.sendInput = { [weak self] paneId, text in
             guard let self,
-                  let terminal = self.tabs.tabs.compactMap({ $0.panes.terminals[paneId] }).first
+                  let tab = self.tabs.tabs.first(where: { $0.panes.terminals[paneId] != nil }),
+                  let terminal = tab.panes.terminals[paneId]
             else { return false }
-            DispatchQueue.main.async { terminal.sendToShell(text) }
+            DispatchQueue.main.async {
+                terminal.sendToShell(text)
+                // The only on-screen sign an agent typed anywhere, since a
+                // background tab's pane gives no other indication at all.
+                tab.panes.flagAgentActivity(paneId: paneId)
+            }
             return true
+        }
+
+        server.confirmSendInput = { [weak self] paneId, text, completion in
+            DispatchQueue.main.async {
+                guard let self else { completion(false); return }
+                let label = self.tabs.tabs
+                    .flatMap { $0.panes.panes }
+                    .first { $0.paneId == paneId }?
+                    .label ?? paneId
+                self.presentInputConfirmation(paneLabel: label, text: text, completion: completion)
+            }
         }
 
         do {
@@ -357,6 +386,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
             mcpServer = server
         } catch {
             NSLog("[MCP] failed to start on port \(settings.mcpPort): \(error)")
+        }
+    }
+
+    /// Approve/deny sheet for `send_input_to_terminal`, shown only when
+    /// `mcpRequireConfirmationForInput` is on. `completion` runs exactly
+    /// once, whether the user clicks a button or the 60s timeout below ends
+    /// the sheet on their behalf — a dialog nobody notices should not hang an
+    /// agent (or the MCP request behind it) for the rest of the session.
+    private func presentInputConfirmation(paneLabel: String, text: String, completion: @escaping (Bool) -> Void) {
+        guard let window else {
+            completion(false)
+            return
+        }
+
+        let alert = NSAlert()
+        alert.messageText = "Allow agent input to \"\(paneLabel)\"?"
+        let preview = text.count > 400 ? String(text.prefix(400)) + "…" : text
+        alert.informativeText = "An MCP client wants to send this to the terminal:\n\n\(preview)"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Allow")
+        alert.addButton(withTitle: "Deny")
+
+        alert.beginSheetModal(for: window) { response in
+            completion(response == .alertFirstButtonReturn)
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 60) { [weak window, weak alert] in
+            guard let window, let alertWindow = alert?.window, window.sheets.contains(alertWindow) else { return }
+            window.endSheet(alertWindow, returnCode: .alertSecondButtonReturn)
         }
     }
 
@@ -578,6 +636,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let controller = SettingsWindowController()
         controller.onSave = { [weak self] _ in
             self?.applyChangedSettings()
+        }
+        // A rotated token is a credential change; it takes effect immediately
+        // rather than waiting for Save, or "Regenerate" would silently lie
+        // about having revoked the old one.
+        controller.onRegenerateToken = { [weak self] in
+            self?.restartMcpServer()
         }
         settingsController = controller
         controller.showWindow(nil)

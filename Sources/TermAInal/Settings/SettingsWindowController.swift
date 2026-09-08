@@ -280,13 +280,18 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// Called with the saved settings so the app can re-apply appearance and
     /// restart the MCP server if its configuration moved.
     var onSave: ((AppSettings) -> Void)?
+    /// Called right after the token is rotated in the keychain. A credential
+    /// change takes effect immediately rather than waiting for Save, since a
+    /// user who clicks Regenerate believing the old token is now revoked
+    /// should not find it still working until their next save.
+    var onRegenerateToken: (() -> Void)?
 
     private var draft: AppSettings
     private let apiKeys = APIKeyDrafts()
 
     // AI tab
     private let profileSwitcher = NSSegmentedControl(
-        labels: ["Commands", "Assistant"], trackingMode: .selectOne, target: nil, action: nil
+        labels: ["Chat", "Insights"], trackingMode: .selectOne, target: nil, action: nil
     )
     private var commandEditor: AIProfileEditor!
     private var insightEditor: AIProfileEditor!
@@ -315,6 +320,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let featureSendInput = NSButton()
     private let featureOpenTerminal = NSButton()
     private let mcpUrlLabel = NSTextField(labelWithString: "")
+    private let mcpTokenField = NSTextField(labelWithString: "")
+    private let mcpRegenerateTokenButton = NSButton()
+    private let mcpCopyTokenButton = NSButton()
+    private let mcpConfirmInputCheckbox = NSButton()
+    private let mcpRestrictToVisiblePaneCheckbox = NSButton()
+    private let mcpAuditLogCheckbox = NSButton()
+    private let mcpRevealAuditLogButton = NSButton()
 
     /// Sentinel for "no explicit family", kept distinct from an empty combo
     /// value: an editable NSComboBox does not reliably preserve an empty
@@ -332,7 +344,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         draft = SettingsStore.shared.settings
 
         let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 480),
+            // Tall enough for the MCP tab, the deepest one: token row, its
+            // note, and three more switches pushed the old 480pt height past
+            // what a fixed, non-scrolling tab body can show — the audit-log
+            // row and the Cancel/Save buttons below the tab view ended up
+            // drawn on top of each other.
+            contentRect: NSRect(x: 0, y: 0, width: 620, height: 620),
             styleMask: [.titled, .closable],
             backing: .buffered,
             defer: false
@@ -419,13 +436,13 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// control sets would not fit, and the choice is rarely made twice at once.
     private func buildAITab() -> NSView {
         commandEditor = AIProfileEditor(
-            title: "Commands",
-            hint: "Used by the command palette. Pick the model whose shell syntax you trust most — a wrong flag is worse than a slow answer.",
+            title: "Chat",
+            hint: "Used by the sidebar's free-form questions and Explain Last — the interactive side of the assistant, answering only when you ask.",
             keys: apiKeys
         )
         insightEditor = AIProfileEditor(
-            title: "Assistant",
-            hint: "Used by the sidebar's insights and questions. Apple's on-device model suits this well: free, no memory cost, and good at explaining — even though it is weaker at writing commands.",
+            title: "Insights",
+            hint: "Used by the automatic commentary the sidebar posts after a command finishes, unprompted. Apple's on-device model suits this well: free, no memory cost, and good at explaining.",
             keys: apiKeys
         )
 
@@ -593,10 +610,48 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         mcpUrlLabel.textColor = .secondaryLabelColor
 
         let note = NSTextField(wrappingLabelWithString:
-            "Changing the port or toggling the server restarts it on Save.")
+            "Changing the port, tools, or any switch below restarts the server on Save.")
         note.font = .systemFont(ofSize: 11)
         note.textColor = .secondaryLabelColor
         note.preferredMaxLayoutWidth = 340
+
+        mcpTokenField.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+        mcpTokenField.isSelectable = true
+        mcpTokenField.lineBreakMode = .byTruncatingMiddle
+        mcpTokenField.widthAnchor.constraint(equalToConstant: 200).isActive = true
+        mcpCopyTokenButton.title = "Copy"
+        mcpCopyTokenButton.bezelStyle = .rounded
+        mcpCopyTokenButton.target = self
+        mcpCopyTokenButton.action = #selector(copyMcpToken)
+        mcpRegenerateTokenButton.title = "Regenerate"
+        mcpRegenerateTokenButton.bezelStyle = .rounded
+        mcpRegenerateTokenButton.target = self
+        mcpRegenerateTokenButton.action = #selector(regenerateMcpToken)
+        let tokenRow = NSStackView(views: [mcpTokenField, mcpCopyTokenButton, mcpRegenerateTokenButton])
+        tokenRow.orientation = .horizontal
+        tokenRow.spacing = 6
+
+        let tokenNote = NSTextField(wrappingLabelWithString:
+            "Required as \"Authorization: Bearer <token>\" on every request — without it, nothing on the loopback address can call these tools, browser JavaScript included.")
+        tokenNote.font = .systemFont(ofSize: 11)
+        tokenNote.textColor = .secondaryLabelColor
+        tokenNote.preferredMaxLayoutWidth = 340
+
+        mcpConfirmInputCheckbox.setButtonType(.switch)
+        mcpConfirmInputCheckbox.title = "Require approval before send_input_to_terminal runs"
+
+        mcpRestrictToVisiblePaneCheckbox.setButtonType(.switch)
+        mcpRestrictToVisiblePaneCheckbox.title = "Only expose the currently visible pane"
+
+        mcpAuditLogCheckbox.setButtonType(.switch)
+        mcpAuditLogCheckbox.title = "Keep a local audit log of tool calls"
+        mcpRevealAuditLogButton.title = "Reveal Log in Finder"
+        mcpRevealAuditLogButton.bezelStyle = .rounded
+        mcpRevealAuditLogButton.target = self
+        mcpRevealAuditLogButton.action = #selector(revealMcpAuditLog)
+        let auditRow = NSStackView(views: [mcpAuditLogCheckbox, mcpRevealAuditLogButton])
+        auditRow.orientation = .horizontal
+        auditRow.spacing = 8
 
         return wrap(form([
             ("", mcpEnabledCheckbox),
@@ -605,6 +660,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             ("", mcpFileBufferCheckbox),
             ("Tools", features),
             ("Endpoint", mcpUrlLabel),
+            ("Token", tokenRow),
+            ("", tokenNote),
+            ("", mcpConfirmInputCheckbox),
+            ("", mcpRestrictToVisiblePaneCheckbox),
+            ("", auditRow),
             ("", note),
         ]))
     }
@@ -644,6 +704,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         featureGetActiveOutput.state = draft.mcpFeatures.getActiveTerminalOutput ? .on : .off
         featureSendInput.state = draft.mcpFeatures.sendInputToTerminal ? .on : .off
         featureOpenTerminal.state = draft.mcpFeatures.openTerminal ? .on : .off
+        mcpConfirmInputCheckbox.state = draft.mcpRequireConfirmationForInput ? .on : .off
+        mcpRestrictToVisiblePaneCheckbox.state = draft.mcpRestrictToVisiblePane ? .on : .off
+        mcpAuditLogCheckbox.state = draft.mcpAuditLogEnabled ? .on : .off
+        mcpTokenField.stringValue = SettingsStore.shared.mcpAuthToken
 
         assistantEnabledCheckbox.state = draft.assistantEnabled ? .on : .off
         assistantInsightsPopup.selectItem(at: Self.insightModes.firstIndex(of: draft.assistantInsights) ?? 1)
@@ -695,6 +759,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             sendInputToTerminal: featureSendInput.state == .on,
             openTerminal: featureOpenTerminal.state == .on
         )
+        draft.mcpRequireConfirmationForInput = mcpConfirmInputCheckbox.state == .on
+        draft.mcpRestrictToVisiblePane = mcpRestrictToVisiblePaneCheckbox.state == .on
+        draft.mcpAuditLogEnabled = mcpAuditLogCheckbox.state == .on
     }
 
     private func updateProfileVisibility() {
@@ -718,6 +785,21 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     @objc private func mcpEnabledChanged() {
         updateMcpUrl()
+    }
+
+    @objc private func copyMcpToken() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        pasteboard.setString(mcpTokenField.stringValue, forType: .string)
+    }
+
+    @objc private func regenerateMcpToken() {
+        mcpTokenField.stringValue = SettingsStore.shared.regenerateMcpAuthToken()
+        onRegenerateToken?()
+    }
+
+    @objc private func revealMcpAuditLog() {
+        NSWorkspace.shared.activateFileViewerSelecting([SettingsStore.shared.mcpAuditLogURL])
     }
 
     @objc private func fontSizeStepped() {

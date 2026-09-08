@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Per-tool MCP toggles — port of the nested `mcpFeatures` object in
 /// `defaultSettings` (`main.ts`). Gates `handleMcpToolCall` dispatch.
@@ -75,11 +76,16 @@ struct AIProfile: Codable, Equatable {
 /// `apiKey` is absent by design: it moves out of the settings file and into the
 /// keychain (see `KeychainStore`), replacing Electron's `safeStorage` hex blob.
 struct AppSettings: Codable {
-    /// Generating shell commands, via the command palette (Cmd+Shift+P).
-    /// Accuracy of shell syntax matters most here.
+    /// Drives the assistant sidebar's interactive chat — free-form questions
+    /// and Explain Last. Originally served the command palette; repurposed
+    /// after that UI was removed rather than left dead, since a user asking
+    /// a direct question benefits from the same "trust its syntax" judgment
+    /// that picked this profile in the first place.
     var commandProfile: AIProfile = AIProfile()
-    /// The assistant sidebar's insights and questions. Explanation quality and
-    /// low cost matter more than command syntax.
+    /// Drives the automatic commentary `AssistantController` posts after a
+    /// command finishes, unprompted. Explanation quality and low cost matter
+    /// more than syntax here — nobody asked for this one, so it should stay
+    /// cheap.
     var insightProfile: AIProfile = AIProfile()
 
     var fontSize: Double = 14
@@ -112,6 +118,23 @@ struct AppSettings: Codable {
     /// When false, overflow is dropped instead of spilled.
     var mcpFileBufferEnabled: Bool = true
     var mcpFeatures: MCPFeatures = MCPFeatures()
+    /// When true, `send_input_to_terminal` waits for the user to approve or
+    /// deny each call in an on-screen sheet before anything reaches the shell
+    /// — the same "generation fills a review sheet, only Execute writes"
+    /// invariant the removed AI palette had, applied to MCP input instead.
+    /// Off by default so existing headless-agent workflows keep working; a
+    /// user who wants the confirmation gate opts in.
+    var mcpRequireConfirmationForInput: Bool = false
+    /// When true, only the currently visible (active tab's expanded) pane is
+    /// exposed to MCP at all — every other tool call behaves as if every
+    /// other pane does not exist. Shrinks the blast radius for a user who
+    /// does not need cross-tab agent automation. Off by default, matching the
+    /// existing "every tab, not just the visible one" design.
+    var mcpRestrictToVisiblePane: Bool = false
+    /// Append-only local log of MCP tool calls (`MCPAuditLog`), never
+    /// transmitted anywhere. On by default — it is the difference between
+    /// "something typed a command" and knowing what happened.
+    var mcpAuditLogEnabled: Bool = true
 
     /// Only for reading a pre-split settings file; never encoded.
     private enum LegacyAIKeys: String, CodingKey {
@@ -156,6 +179,9 @@ struct AppSettings: Codable {
         mcpBufferSizeKB = try c.decodeIfPresent(Int.self, forKey: .mcpBufferSizeKB) ?? d.mcpBufferSizeKB
         mcpFileBufferEnabled = try c.decodeIfPresent(Bool.self, forKey: .mcpFileBufferEnabled) ?? d.mcpFileBufferEnabled
         mcpFeatures = try c.decodeIfPresent(MCPFeatures.self, forKey: .mcpFeatures) ?? d.mcpFeatures
+        mcpRequireConfirmationForInput = try c.decodeIfPresent(Bool.self, forKey: .mcpRequireConfirmationForInput) ?? d.mcpRequireConfirmationForInput
+        mcpRestrictToVisiblePane = try c.decodeIfPresent(Bool.self, forKey: .mcpRestrictToVisiblePane) ?? d.mcpRestrictToVisiblePane
+        mcpAuditLogEnabled = try c.decodeIfPresent(Bool.self, forKey: .mcpAuditLogEnabled) ?? d.mcpAuditLogEnabled
     }
 }
 
@@ -256,5 +282,46 @@ final class SettingsStore {
 
     func setApiKey(_ key: String, for provider: String) {
         KeychainStore.set(key, account: "apiKey.\(provider)")
+    }
+
+    /// Shared secret an MCP client must present as `Authorization: Bearer
+    /// <token>`. Lives in the keychain, never in `settings.json` — the same
+    /// reasoning as API keys: a credential belongs there, not in a plaintext
+    /// file. Generated once, on first access, and reused across launches so a
+    /// client's config does not go stale every restart.
+    var mcpAuthToken: String {
+        if let existing = KeychainStore.get(account: "mcpAuthToken"), !existing.isEmpty {
+            return existing
+        }
+        return regenerateMcpAuthToken()
+    }
+
+    /// Rotates the token immediately. The caller is responsible for
+    /// restarting the MCP server so the new value actually takes effect —
+    /// otherwise a user who regenerates it believing the old one is revoked
+    /// would find it still works until their next Settings save.
+    @discardableResult
+    func regenerateMcpAuthToken() -> String {
+        let token = Self.randomToken()
+        KeychainStore.set(token, account: "mcpAuthToken")
+        return token
+    }
+
+    private static func randomToken(bytes: Int = 32) -> String {
+        var data = Data(count: bytes)
+        let result = data.withUnsafeMutableBytes { buffer in
+            SecRandomCopyBytes(kSecRandomDefault, bytes, buffer.baseAddress!)
+        }
+        guard result == errSecSuccess else {
+            // Vanishingly unlikely, but a token is still better than a crash.
+            return UUID().uuidString + UUID().uuidString
+        }
+        return data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// Where `MCPAuditLog` appends its lines — alongside `settings.json`
+    /// rather than a separate directory, since both are per-install app state.
+    var mcpAuditLogURL: URL {
+        settingsURL.deletingLastPathComponent().appendingPathComponent("mcp-audit.log")
     }
 }

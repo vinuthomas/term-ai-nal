@@ -88,9 +88,20 @@ cat > "$APP/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# Ad-hoc signature is enough for local runs and lets the Keychain item stick to
-# a stable identity. NOT sandboxed: SwiftTerm's child shell needs full access.
-codesign --force --sign - "$APP" >/dev/null 2>&1 || \
+# Ad-hoc signing alone was NOT enough to keep the Keychain item's ACL stable:
+# `codesign --sign -` with no explicit requirement derives the designated
+# requirement from the binary's own hash (`cdhash H"..."`), which is different
+# on every rebuild. Keychain records that hash as "the app allowed to read
+# this item" the first time it's granted, so every subsequent rebuild looked
+# like a different, untrusted app and re-prompted for the login password —
+# hit on every `make-app.sh` run once `mcpAuthToken` started being read at
+# launch. Signing with an explicit identifier-based requirement instead makes
+# the designated requirement `identifier "com.termainal.app"`, which stays
+# the same across rebuilds, so the keychain's grant does too.
+#
+# NOT sandboxed: SwiftTerm's child shell needs full filesystem access.
+codesign --force --sign - --identifier com.termainal.app \
+    -r='designated => identifier "com.termainal.app"' "$APP" >/dev/null 2>&1 || \
     echo "    (codesign skipped; app will still run locally)"
 
 # The Dock and Finder cache icons per bundle path, so a rebuild in place can

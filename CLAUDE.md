@@ -136,7 +136,25 @@ by `settings.mcpFeatures`. Panes are exposed across *every* tab, not just the vi
 shell in a background tab is live and an agent may be driving it. Every tool branch returns
 human-readable text, errors included, so clients never special-case failure.
 
-**Two `AIProfile`s, not one.** `commandProfile` serves the palette (shell syntax accuracy);
+Every request needs `Authorization: Bearer <SettingsStore.mcpAuthToken>` — a random token
+generated on first access and kept in the keychain, checked in `route()` before any handler
+runs. Responses carry no `Access-Control-Allow-*` headers at all, on purpose: earlier builds
+sent a wildcard `Access-Control-Allow-Origin: *`, which combined with no authentication meant
+any JavaScript running in any browser tab on the machine could call `send_input_to_terminal`
+with zero interaction from the user — an MCP client is a local agent process, never a browser,
+so nothing here is meant to satisfy CORS. Beyond that floor, three settings shrink the blast
+radius further: `mcpRequireConfirmationForInput` routes `send_input_to_terminal` through an
+approve/deny sheet (`AppDelegate.presentInputConfirmation`) before anything reaches the shell —
+the request just stays open on its connection until the user answers or a 60s timeout denies
+it, so nothing on `queue` blocks while it waits; `mcpRestrictToVisiblePane` filters
+`panesProvider` down to the single active pane, which is the whole mechanism since every tool
+already gates on membership in that list; and `mcpAuditLogEnabled` appends every tool call to
+`MCPAuditLog` (next to `settings.json`, trimmed past 1MB), the only local record of what an
+agent actually did. `PaneController.flagAgentActivity` badges a pane's header the moment MCP
+sends it input, cleared the moment the pane is expanded — otherwise a background tab being
+driven gives no on-screen sign of it at all.
+
+**Two `AIProfile`s, not one.** `commandProfile` was the removed command palette's (shell syntax accuracy);
 `insightProfile` serves the assistant (explanation quality, low cost). The split is measured,
 not speculative: on the same failing `ls`, Apple's on-device 3B diagnosed it correctly but
 generated `ls -l | sort -rn | tail -n 1` for "largest file" — sorting by link count and
@@ -292,8 +310,10 @@ Do not assume these work; `docs/MIGRATION.md` is the authoritative list.
 - **Pane labels** — `PaneNode.label` is plumbed through to MCP but nothing sets it.
 - **MCP hidden panes** — hiding is expressed only by omitting a pane from `panesProvider`;
   the distinct 403 "not visible to MCP" response collapsed into a 404.
-- **MCP restart on settings change** — `MCPServer` is immutable per port, so changing the
-  port or the enabled flag needs `stop()` plus a fresh instance. Not wired up.
+- ~~MCP restart on settings change not wired up~~ — it is: `applyChangedSettings()` calls
+  `restartMcpServer()` unconditionally on every Settings save, and `MCPServer` is immutable per
+  port by design, so a changed port/token/feature/switch always gets a fresh instance rather
+  than a half-updated live one.
 - **AI command palette removed.** `AIPaletteController` (the generate-into-a-review-sheet
   UI, `Cmd+Shift+P`) was deleted as unused. `AIService.suggestCommand` and the
   `commandProfile` settings/editor/`--check-ai` role are left in place — nothing else in the

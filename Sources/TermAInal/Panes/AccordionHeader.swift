@@ -51,9 +51,21 @@ final class AccordionHeader: NSView {
         }
     }
 
+    /// Set by `PaneController` when MCP sends input to this pane while it is
+    /// not the one being looked at — the only on-screen sign of that for a
+    /// collapsed pane or one in a background tab. Cleared the moment the pane
+    /// is expanded.
+    var hasAgentActivity: Bool = false {
+        didSet {
+            guard hasAgentActivity != oldValue else { return }
+            refresh()
+        }
+    }
+
     private let accentEdge = NSView()
     private let chevron = NSImageView()
     private let titleField = NSTextField(labelWithString: "")
+    private let agentActivityDot = NSView()
     private let hintField = NSTextField(labelWithString: "")
     private let closeButton = NSButton()
     private let bottomSeparator = NSView()
@@ -90,6 +102,11 @@ final class AccordionHeader: NSView {
         titleField.cell?.truncatesLastVisibleLine = true
         titleField.translatesAutoresizingMaskIntoConstraints = false
 
+        agentActivityDot.wantsLayer = true
+        agentActivityDot.toolTip = "An MCP agent sent input here"
+        agentActivityDot.isHidden = true
+        agentActivityDot.translatesAutoresizingMaskIntoConstraints = false
+
         hintField.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
         hintField.alignment = .right
         hintField.isHidden = true
@@ -111,6 +128,7 @@ final class AccordionHeader: NSView {
         addSubview(accentEdge)
         addSubview(chevron)
         addSubview(titleField)
+        addSubview(agentActivityDot)
         addSubview(hintField)
         addSubview(closeButton)
         addSubview(bottomSeparator)
@@ -131,8 +149,13 @@ final class AccordionHeader: NSView {
             chevron.widthAnchor.constraint(equalToConstant: 10),
 
             titleField.leadingAnchor.constraint(equalTo: chevron.trailingAnchor, constant: 6),
-            titleField.trailingAnchor.constraint(lessThanOrEqualTo: hintField.leadingAnchor, constant: -8),
+            titleField.trailingAnchor.constraint(lessThanOrEqualTo: agentActivityDot.leadingAnchor, constant: -6),
             titleField.centerYAnchor.constraint(equalTo: centerYAnchor),
+
+            agentActivityDot.trailingAnchor.constraint(equalTo: hintField.leadingAnchor, constant: -6),
+            agentActivityDot.centerYAnchor.constraint(equalTo: centerYAnchor),
+            agentActivityDot.widthAnchor.constraint(equalToConstant: 6),
+            agentActivityDot.heightAnchor.constraint(equalToConstant: 6),
 
             hintField.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -4),
             hintField.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -192,6 +215,13 @@ final class AccordionHeader: NSView {
         titleField.textColor = text
         hintField.textColor = isExpanded ? palette.expandedHint : palette.collapsedHint
         closeButton.contentTintColor = text
+
+        agentActivityDot.layer?.cornerRadius = 3
+        agentActivityDot.layer?.backgroundColor = palette.accent.cgColor
+        // Expanding a pane clears the flag, so there is never anything to
+        // show once it is the one on screen — showing it anyway would read
+        // as "still happening" rather than "happened while you were away".
+        agentActivityDot.isHidden = !hasAgentActivity || isExpanded
 
         // Shown on hover or when expanded: a close box on every row at all
         // times is noise on a stack of panes, and invites misclicks.
