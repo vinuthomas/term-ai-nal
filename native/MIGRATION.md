@@ -188,7 +188,21 @@ default over what the Electron build actually did:
    tripped Powerlevel10k's instant-prompt warning on every launch. The child now
    inherits the full environment, with TERM/COLORTERM/SHELL set explicitly and
    LANG only as a fallback. Went from 6 variables to 60.
-2. **Dropping the font fallback stack.** `DEFAULT_FONT_FAMILY` in
+2. **Inheriting *too much* environment.** The fix above went the other way and
+   handed the child everything, including variables that describe the process
+   which launched the app. Launched from a terminal running Claude Code — which
+   is how it starts during development — every pane inherited that session's
+   markers, so `claude` run inside a pane saw `CLAUDE_CODE_CHILD_SESSION`,
+   concluded it was a nested child and silently stopped saving transcripts.
+   `CLAUDE_CODE_MESSAGING_TOKEN` is a credential besides. Session-scoped
+   variables are now scrubbed: tool markers (prefix `CLAUDE_CODE_`, but *not*
+   `CLAUDE_` — that would take the user's own `CLAUDE_CONFIG_DIR`), the
+   launching terminal's identity (`TERM_SESSION_ID`, `ITERM_*`, `LC_TERMINAL*`,
+   `__CFBundleIdentifier`), Powerlevel10k's per-tty cache, and shell
+   bookkeeping (`SHLVL`, `_`, `OLDPWD`). `TERM_PROGRAM` is set to this app
+   rather than passed on. Terminal.app and iTerm2 never hit this only because
+   they are normally launched from Finder.
+3. **Dropping the font fallback stack.** `DEFAULT_FONT_FAMILY` in
    `TerminalPane.tsx` listed Nerd Font variants first, and it existed precisely
    for glyph coverage. Falling back to `NSFont.monospacedSystemFont` instead
    rendered Powerlevel10k's private-use-area icons as replacement boxes.

@@ -107,11 +107,72 @@ final class TerminalPaneView: LocalProcessTerminalView {
     /// path and emit `(eval):type: bad option: -t`, which then tripped
     /// Powerlevel10k's instant-prompt console-output warning. `SHELL` is set
     /// explicitly because a GUI launch via launchd may not provide one.
+    /// Variables a launching process injects for its own use, which must not
+    /// be handed on to a user's shell.
+    ///
+    /// Inheriting the full environment is right — see above — but "full" cannot
+    /// include the launcher's private session state. Launch this app from a
+    /// Claude Code session (which is how it gets launched during development)
+    /// and without this every shell it opens inherits that session's markers:
+    /// `claude` run inside the terminal then sees `CLAUDE_CODE_CHILD_SESSION`,
+    /// concludes it is a nested child, and silently stops saving transcripts.
+    /// `CLAUDE_CODE_MESSAGING_TOKEN` is a credential besides.
+    ///
+    /// Only session-scoped markers are listed. Genuine user configuration
+    /// (`CLAUDE_CONFIG_DIR`, `ANTHROPIC_*`) is the user's own and passes
+    /// through untouched.
+    /// The same reasoning applies beyond Claude Code: anything identifying the
+    /// terminal or tty we were launched from is a lie in a new pane. An
+    /// inherited `SHLVL` in particular makes a fresh login shell look nested,
+    /// which both prompts and `exit` react to.
+    private static let launcherPrivateVariables = [
+        "CLAUDECODE",
+        "CLAUDE_CODE_ENTRYPOINT",
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDE_CODE_CHILD_SESSION",
+        "CLAUDE_CODE_MESSAGING_SOCKET",
+        "CLAUDE_CODE_MESSAGING_TOKEN",
+        "CLAUDE_CODE_EXECPATH",
+        "CLAUDE_PID",
+        "CLAUDE_EFFORT",
+        // Identity of the terminal that launched us.
+        "TERM_SESSION_ID",
+        "ITERM_SESSION_ID",
+        "ITERM_PROFILE",
+        "LC_TERMINAL",
+        "LC_TERMINAL_VERSION",
+        "WINDOWID",
+        // Powerlevel10k's per-tty cache, wrong for a new tty.
+        "_P9K_TTY",
+        "_P9K_SSH_TTY",
+        // The launching application's bundle id.
+        "__CFBundleIdentifier",
+        // Shell bookkeeping that belongs to the parent shell, not this one.
+        "SHLVL",
+        "_",
+        "OLDPWD",
+        "ZSH_EXECUTION_STRING",
+    ]
+
     static func childEnvironment() -> [String] {
         var environment = ProcessInfo.processInfo.environment
+        for key in launcherPrivateVariables { environment.removeValue(forKey: key) }
+        // Prefix-matched as well, because the tool-owned set grows and a marker
+        // added upstream would otherwise silently start leaking again. Note
+        // this is `CLAUDE_CODE_`, not `CLAUDE_`: the latter would take
+        // `CLAUDE_CONFIG_DIR`, which is the user's own configuration.
+        for key in environment.keys where key.hasPrefix("CLAUDE_CODE_") {
+            environment.removeValue(forKey: key)
+        }
+
         environment["TERM"] = "xterm-256color"
         environment["COLORTERM"] = "truecolor"
         environment["SHELL"] = loginShell
+        // Announce ourselves rather than passing on whoever launched us, so
+        // shell configuration can branch on the real host terminal.
+        environment["TERM_PROGRAM"] = "term-ai-nal"
+        environment["TERM_PROGRAM_VERSION"] = Bundle.main
+            .object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
         // Only a fallback: an inherited locale is the user's own choice, but
         // without any locale tools like vi emit non-UTF-8 sequences.
         if environment["LANG"] == nil, environment["LC_ALL"] == nil {
