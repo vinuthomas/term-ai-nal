@@ -43,12 +43,32 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     /// Only the providers that actually work. Anthropic and Gemini are not
     /// ported yet, so listing them would offer a dead end.
-    private static let providers: [(key: String, title: String)] = [
+    private static let supportedProviders: [(key: String, title: String)] = [
         ("apple", "Apple Intelligence (on-device)"),
         ("openai", "OpenAI"),
         ("perplexity", "Perplexity"),
         ("ollama", "Ollama (local)"),
     ]
+
+    /// Supported providers, plus the stored one when it is not among them.
+    ///
+    /// Without the extra entry a config carrying `anthropic` or `gemini` — both
+    /// unported, and both reachable via the one-time Electron import — would
+    /// find no matching item, leave the popup on index 0, and get silently
+    /// rewritten to Apple on Save.
+    private var providers: [(key: String, title: String)] {
+        var list = Self.supportedProviders
+        if !list.contains(where: { $0.key == draft.provider }) {
+            list.append((draft.provider, "\(draft.provider) (not ported)"))
+        }
+        return list
+    }
+
+    /// Sentinel for "no explicit family", kept distinct from an empty combo
+    /// value: an editable NSComboBox does not reliably preserve an empty
+    /// string, and letting it fall through to the first listed family meant
+    /// opening Settings and saving silently replaced the automatic font.
+    private static let automaticFont = "Automatic (best Unicode coverage)"
 
     init() {
         draft = SettingsStore.shared.settings
@@ -138,7 +158,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func buildAITab() -> NSView {
-        for provider in Self.providers {
+        for provider in providers {
             providerPopup.addItem(withTitle: provider.title)
         }
         providerPopup.target = self
@@ -182,7 +202,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         // Only monospaced families, since a proportional font in a terminal
         // grid is never what anyone wants.
         fontCombo.isEditable = true
-        fontCombo.addItem(withObjectValue: "")
+        fontCombo.addItem(withObjectValue: Self.automaticFont)
         for family in Self.monospacedFontFamilies() {
             fontCombo.addItem(withObjectValue: family)
         }
@@ -280,7 +300,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     // MARK: - Draft <-> controls
 
     private func syncFromDraft() {
-        if let index = Self.providers.firstIndex(where: { $0.key == draft.provider }) {
+        if let index = providers.firstIndex(where: { $0.key == draft.provider }) {
             providerPopup.selectItem(at: index)
         }
         appleModelPopup.selectItem(at: draft.appleModel == "pcc" ? 1 : 0)
@@ -288,7 +308,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         modelCombo.stringValue = draft.model
         baseUrlField.stringValue = draft.baseUrl
 
-        fontCombo.stringValue = draft.fontFamily
+        fontCombo.stringValue = draft.fontFamily.isEmpty ? Self.automaticFont : draft.fontFamily
         fontSizeField.stringValue = String(Int(draft.fontSize))
         fontSizeStepper.doubleValue = draft.fontSize
         if let index = TerminalThemes.all.firstIndex(where: { $0.key == draft.theme }) {
@@ -311,16 +331,22 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func collectIntoDraft() {
+        let candidates = providers
         let providerIndex = providerPopup.indexOfSelectedItem
-        if Self.providers.indices.contains(providerIndex) {
-            draft.provider = Self.providers[providerIndex].key
+        if candidates.indices.contains(providerIndex) {
+            draft.provider = candidates[providerIndex].key
         }
         draft.appleModel = appleModelPopup.indexOfSelectedItem == 1 ? "pcc" : "on-device"
         draft.model = modelCombo.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         draft.baseUrl = baseUrlField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         apiKey = apiKeyField.stringValue
 
-        draft.fontFamily = fontCombo.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let chosenFont = fontCombo.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An unresolvable family is stored as automatic rather than kept as a
+        // name that silently falls back on every launch.
+        draft.fontFamily = (chosenFont == Self.automaticFont || NSFont(name: chosenFont, size: 12) == nil)
+            ? ""
+            : chosenFont
         draft.fontSize = Double(fontSizeField.stringValue).map { min(max($0, 8), 32) } ?? draft.fontSize
         let themeIndex = themePopup.indexOfSelectedItem
         if TerminalThemes.all.indices.contains(themeIndex) {
@@ -346,7 +372,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func updateProviderVisibility() {
-        let provider = Self.providers[max(0, providerPopup.indexOfSelectedItem)].key
+        let candidates = providers
+        let provider = candidates[min(max(0, providerPopup.indexOfSelectedItem), candidates.count - 1)].key
         let isApple = provider == "apple"
         let isOllama = provider == "ollama"
 
