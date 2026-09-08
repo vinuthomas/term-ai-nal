@@ -65,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // The AppKit equivalent of Electron's titleBarStyle: 'hiddenInset'.
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
-        window.backgroundColor = NSColor(calibratedRed: 0.118, green: 0.118, blue: 0.118, alpha: 1)
+        applyWindowBackground()
 
         let content = NSView()
         content.addSubview(panes.containerView)
@@ -80,6 +80,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.contentView = content
         window.center()
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// Matches the window's background to the active theme so the per-pane
+    /// padding reads as margin rather than as a border.
+    private func applyWindowBackground() {
+        let theme = TerminalThemes.theme(forKey: SettingsStore.shared.settings.theme)
+        window.backgroundColor = theme.background
     }
 
     private func applyBufferSettings() {
@@ -256,6 +263,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// port and feature set are fixed at construction.
     private func applyChangedSettings() {
         applyBufferSettings()
+        applyWindowBackground()
         panes.applyAppearanceToAll()
         restartMcpServer()
         settingsController = nil

@@ -189,6 +189,25 @@ Both were invisible to the headless checks and to `swift build` — the lesson i
 that a "port of X" comment is worth little unless the *reason* X looked odd is
 carried across with it.
 
+## Verifying pane reuse
+
+The most fragile invariant in the app is that a relayout re-parents terminals
+rather than recreating them — get it wrong and every split silently kills the
+running shells. GUI automation cannot reach it (`System Events` keystrokes need
+accessibility permission, which the app does not have), so it was checked with a
+throwaway `--self-test-panes` branch in `main.swift`:
+
+```swift
+let panes = PaneController()
+let first = panes.terminals[panes.activePaneId]
+panes.splitActivePane(direction: .horizontal)
+assert(panes.terminals[panes.activePaneId] === first)   // object identity
+assert(first?.process.running == true)                  // shell still alive
+```
+
+Object identity plus `process.running` is the whole test. Worth re-adding
+whenever `PaneController`'s view construction changes.
+
 ## Known constraints
 
 - **Xcode is now required to build.** The `FoundationModelsMacros` plugin ships

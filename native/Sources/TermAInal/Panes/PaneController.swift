@@ -10,6 +10,9 @@ import AppKit
 final class PaneController {
     private(set) var root: PaneNode
     private(set) var terminals: [String: TerminalPaneView] = [:]
+    /// One padded wrapper per pane. These are what get inserted into the split
+    /// views; the terminal itself is inset inside its wrapper.
+    private var paneContainers: [String: NSView] = [:]
     private(set) var activePaneId: String
 
     /// Host view the layout is mounted into.
@@ -95,7 +98,8 @@ final class PaneController {
         root.pruneEmptyGroups()
 
         terminals[activePaneId]?.terminate()
-        terminals[activePaneId]?.removeFromSuperview()
+        paneContainers[activePaneId]?.removeFromSuperview()
+        paneContainers.removeValue(forKey: activePaneId)
         terminals.removeValue(forKey: activePaneId)
 
         activePaneId = remaining.first ?? activePaneId
@@ -156,6 +160,8 @@ final class PaneController {
         for (paneId, view) in terminals where !live.contains(paneId) {
             view.terminate()
             view.removeFromSuperview()
+            paneContainers[paneId]?.removeFromSuperview()
+            paneContainers.removeValue(forKey: paneId)
             terminals.removeValue(forKey: paneId)
         }
 
@@ -190,7 +196,7 @@ final class PaneController {
     private func terminalView(for node: PaneNode) -> NSView {
         guard let paneId = node.paneId else { return NSView() }
 
-        if let existing = terminals[paneId] {
+        if let existing = paneContainers[paneId] {
             existing.removeFromSuperview()
             return existing
         }
@@ -218,6 +224,29 @@ final class PaneController {
         terminals[paneId] = terminal
         applyAppearance(to: terminal)
         terminal.start(cwd: node.cwd)
-        return terminal
+
+        let container = Self.padded(terminal)
+        paneContainers[paneId] = container
+        return container
+    }
+
+    /// Insets a terminal inside a transparent wrapper.
+    ///
+    /// SwiftTerm draws glyphs flush to its own bounds and offers no inset of its
+    /// own, so without this the first column collides with the window edge and,
+    /// in a split, with the divider. iTerm2 and Terminal.app both leave a
+    /// margin. The wrapper stays transparent so the window's themed background
+    /// shows through and the gap is invisible.
+    private static func padded(_ terminal: NSView) -> NSView {
+        let container = NSView()
+        terminal.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(terminal)
+        NSLayoutConstraint.activate([
+            terminal.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
+            terminal.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
+            terminal.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
+            terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6),
+        ])
+        return container
     }
 }
