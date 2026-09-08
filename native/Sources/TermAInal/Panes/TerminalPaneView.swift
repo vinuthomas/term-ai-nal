@@ -103,6 +103,30 @@ final class TerminalPaneView: LocalProcessTerminalView {
         needsDisplay = true
     }
 
+    /// Pastes a clipboard image as an inline image, returning false when the
+    /// clipboard holds no image.
+    ///
+    /// Port of `pasteImageToTerminal`, which used xterm.js's image addon. Here
+    /// the iTerm2 OSC 1337 `File=` sequence is fed straight to the emulator,
+    /// which SwiftTerm renders natively. It deliberately does not go to the
+    /// PTY: this is a display action, and the shell has no idea an image
+    /// arrived — the same tradeoff the Electron build made.
+    func pasteImageFromClipboard() -> Bool {
+        let pasteboard = NSPasteboard.general
+        guard pasteboard.canReadObject(forClasses: [NSImage.self], options: nil),
+              let image = NSImage(pasteboard: pasteboard),
+              let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff),
+              let png = bitmap.representation(using: .png, properties: [:])
+        else {
+            return false
+        }
+
+        let payload = png.base64EncodedString()
+        feed(text: "\u{1b}]1337;File=inline=1;preserveAspectRatio=1;size=\(png.count):\(payload)\u{07}\r\n")
+        return true
+    }
+
     // MARK: - Output tap
 
     override func dataReceived(slice: ArraySlice<UInt8>) {

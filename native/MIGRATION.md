@@ -56,8 +56,12 @@ only the Execute button writes to the shell.
   live panes on Save.
 - **Ollama end to end**: model discovery via `/api/tags`, plus `suggestCommand`
   and `plan` both returning correct output with `qwen2.5-coder:14b`.
-- Apple Intelligence availability probe reports correctly (currently
-  `appleIntelligenceNotEnabled` on this machine).
+- Apple Intelligence availability probe reports correctly, and with the feature
+  enabled the **`@Generable` round trip works** — guided generation returns a
+  typed result with no parsing layer at all.
+- **Session restore**: a saved two-pane layout comes back with directories and
+  labels intact and fresh pane ids, and a graceful quit re-saves live
+  directories.
 
 Run `TermAInal --check-ai` for a headless check of the configured provider —
 it prints the settings path, availability, discovered Ollama models, and
@@ -65,12 +69,28 @@ exercises both AI entry points. The AI layer is otherwise only reachable by
 driving the UI.
 
 ### Not verified
-- **Apple Intelligence inference.** Blocked on it being turned on in System
-  Settings, not on code. The framework links, the schema builds and the
-  availability probe works; the `DynamicGenerationSchema` round-trip itself is
-  still unproven and remains the least-certain code in the tree.
 - **OpenAI / Perplexity.** Need a real key. The `response_format` JSON-schema
   branch for OpenAI is written but unexercised.
+- **Image paste rendering.** The escape sequence is emitted and SwiftTerm
+  supports the protocol, but nobody has watched an image appear.
+
+### Provider quality, measured
+
+Same two prompts, via `--check-ai`:
+
+| provider | command produced | verdict |
+|---|---|---|
+| `qwen3:4b` (Ollama) | `ls -lhS` | correct |
+| `qwen2.5-coder:14b` | `ls -lhS` | correct, ~9 GB resident |
+| Apple on-device (3B) | `ls -l \| sort -rn \| tail -n 1` | wrong — sorts by link count, `tail` takes the smallest |
+| DeepSeek-R1-Distill-1.5B | `ls -d` | unusable |
+
+Apple's model is free, instant and costs no resident RAM, but it is weaker at
+shell syntax — Apple deprioritises code for it deliberately. This is the
+argument for the **tiered** design: the on-device model for the cheap, frequent,
+structured work (summarising output, explaining a failure, labelling panes) and
+a coder-tuned model for actually generating commands. The default ships as
+Ollama + `qwen3:4b`; switch in Settings.
 
 ## Improvements over the Electron build
 
@@ -173,7 +193,7 @@ justify a native app at all.
 
 ### Phase 1 — Dogfoodable (the gate)
 
-**Items 1-4 are done.** Remaining: 5 (session restore) and 6 (image paste).
+**Phase 1 is complete.** Only image paste lacks a visual confirmation.
 
 In rough dependency order:
 
@@ -200,12 +220,15 @@ In rough dependency order:
    `TerminalThemes` and applied via `installColors` plus
    foreground/background/caret/selection. `parseItermTheme` is **dropped by
    decision**; `customTheme`/`customThemeName` stay out of `AppSettings`.
-5. **Session restore** — `session.json`, layout + cwd persistence, and the
-   `before-quit` cwd refresh. `PaneNode` is already tree-shaped and
-   `ProcessCwd.lookup` already works, so this is mostly `Codable` on the tree
-   plus an `applicationWillTerminate` hook.
-6. **Image paste** — `pasteImageToTerminal` has no equivalent. SwiftTerm needs
-   checking for Sixel/iTerm2 inline-image support before committing to this.
+5. **Session restore** — done. `SessionStore` persists the layout with each
+   pane's directory inline, rather than the layout plus a parallel `cwds` array
+   the Electron version used, which removes an index-alignment bug class.
+   Directories are resolved live at capture time, so the separate `before-quit`
+   cwd refresh is unnecessary.
+6. **Image paste** — implemented. SwiftTerm renders both Sixel and the iTerm2
+   OSC 1337 `File=` protocol natively, so Cmd+V converts a clipboard image to
+   PNG and feeds the escape sequence to the emulator, falling back to a text
+   paste. **Needs a visual check** — it cannot be verified headlessly.
 
 Exit criterion: you have used it for a full day without reaching for the
 Electron build.

@@ -7,7 +7,9 @@ import SwiftTerm
 /// instead of the renderer's manual `isInputFocused` guard.
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var window: NSWindow!
-    private let panes = PaneController()
+    /// Built in `applicationDidFinishLaunching`, once settings are loaded and
+    /// any saved session is available to restore from.
+    private var panes: PaneController!
     private var mcpServer: MCPServer?
     /// Held while the sheet is up; released when it closes.
     private var palette: AIPaletteController?
@@ -16,6 +18,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         SettingsStore.shared.load()
         applyBufferSettings()
+
+        // Only restore when the setting is on; otherwise drop any stale file so
+        // turning the option off actually forgets the layout.
+        let settings = SettingsStore.shared.settings
+        if settings.restoreSession {
+            panes = PaneController(restoring: SessionStore.load())
+        } else {
+            SessionStore.clear()
+            panes = PaneController()
+        }
 
         buildWindow()
         buildMenu()
@@ -33,6 +45,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        if SettingsStore.shared.settings.restoreSession {
+            SessionStore.save(panes.captureSession())
+        }
         mcpServer?.stop()
         OutputBuffer.shared.cleanupAll()
     }
@@ -144,7 +159,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let editMenuItem = NSMenuItem()
         let editMenu = NSMenu(title: "Edit")
         editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        addItem(to: editMenu, "Paste", #selector(pasteIntoTerminal), "v", [.command])
         editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
         editMenuItem.submenu = editMenu
         mainMenu.addItem(editMenuItem)
@@ -201,6 +216,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func splitLeft() { panes.splitActivePane(direction: .horizontal, before: true) }
     @objc private func splitUp() { panes.splitActivePane(direction: .vertical, before: true) }
     @objc private func closePane() { panes.closeActivePane() }
+
+    /// Image first, then text — the Cmd+V order the Electron build used.
+    @objc private func pasteIntoTerminal() {
+        guard let terminal = panes.activeTerminal else { return }
+        if terminal.pasteImageFromClipboard() { return }
+        terminal.paste(self)
+    }
     @objc private func focusPane(_ sender: NSMenuItem) { panes.focusPane(number: sender.tag) }
 
     /// Cmd+L: what Ctrl+L does — let the shell redraw its own prompt.

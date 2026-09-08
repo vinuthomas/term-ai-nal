@@ -17,13 +17,30 @@ final class PaneController {
 
     var onActivePaneChange: ((String) -> Void)?
 
-    init() {
-        let firstPaneId = Self.newPaneId()
-        root = .pane(paneId: firstPaneId)
-        activePaneId = firstPaneId
+    /// Restores `snapshot` when one is supplied and usable, otherwise starts
+    /// with a single pane. Restoring happens before the first `rebuild()` so a
+    /// throwaway shell is never spawned only to be killed.
+    init(restoring snapshot: SessionSnapshot? = nil) {
+        if let snapshot,
+           let restored = PaneNode.from(snapshot.layout, newPaneId: Self.newPaneId),
+           let first = restored.allPaneIds.first {
+            root = restored
+            activePaneId = first
+        } else {
+            let firstPaneId = Self.newPaneId()
+            root = .pane(paneId: firstPaneId)
+            activePaneId = firstPaneId
+        }
         containerView.translatesAutoresizingMaskIntoConstraints = false
         root.renumberPanes()
         rebuild()
+    }
+
+    /// Snapshot of the current layout, with each pane's live directory.
+    func captureSession() -> SessionSnapshot {
+        SessionSnapshot(layout: root.snapshotNode { [weak self] paneId in
+            self?.terminals[paneId]?.currentCwd
+        })
     }
 
     static func newPaneId() -> String {
