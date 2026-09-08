@@ -52,6 +52,14 @@ struct AppSettings: Codable {
     // `customTheme` / `customThemeName` keys are intentionally omitted. Built-in
     // themes only — see TerminalThemes.
 
+    // Assistant sidebar
+    var assistantEnabled: Bool = true
+    /// `off`, `failures` or `all`. Defaults to failures: an observation after
+    /// every successful command is mostly noise, and on metered or on-device
+    /// models it is also a steady cost for little gain.
+    var assistantInsights: String = "failures"
+    var assistantSidebarWidth: Double = 340
+
     var mcpEnabled: Bool = true
     var mcpPort: Int = 57320
     /// Per-terminal in-memory buffer size; overflow spills to a temp file.
@@ -79,6 +87,9 @@ struct AppSettings: Codable {
         fontFamily = try c.decodeIfPresent(String.self, forKey: .fontFamily) ?? d.fontFamily
         theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? d.theme
         restoreSession = try c.decodeIfPresent(Bool.self, forKey: .restoreSession) ?? d.restoreSession
+        assistantEnabled = try c.decodeIfPresent(Bool.self, forKey: .assistantEnabled) ?? d.assistantEnabled
+        assistantInsights = try c.decodeIfPresent(String.self, forKey: .assistantInsights) ?? d.assistantInsights
+        assistantSidebarWidth = try c.decodeIfPresent(Double.self, forKey: .assistantSidebarWidth) ?? d.assistantSidebarWidth
         mcpEnabled = try c.decodeIfPresent(Bool.self, forKey: .mcpEnabled) ?? d.mcpEnabled
         mcpPort = try c.decodeIfPresent(Int.self, forKey: .mcpPort) ?? d.mcpPort
         mcpBufferSizeKB = try c.decodeIfPresent(Int.self, forKey: .mcpBufferSizeKB) ?? d.mcpBufferSizeKB

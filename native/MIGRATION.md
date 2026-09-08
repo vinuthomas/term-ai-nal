@@ -275,6 +275,55 @@ In rough dependency order:
 Exit criterion: you have used it for a full day without reaching for the
 Electron build.
 
+### Phase 3 progress — the assistant sidebar
+
+Built ahead of Phase 2, because the request for "insights after execution, not
+in flight" *is* the OSC 133 work: an insight needs a command boundary with an
+exit status, which a flat output buffer cannot provide.
+
+- **`Terminal/CommandLog.swift`** — parses OSC 133 semantic prompt marks
+  (`A` prompt, `B` command start, `C` execution, `D;<exit>` finish) plus
+  `1337;CurrentDir=`, turning the PTY stream into `CommandRecord`s carrying
+  command, cwd, output, exit code and duration. Chunk-boundary safe via a
+  per-pane carry buffer; capped at 200 records and 256 KB of output each.
+  The same output tap now feeds two consumers: `OutputBuffer` for flat MCP
+  reads, `CommandLog` for structure.
+- **`Assistant/AssistantSidebarView.swift`** — collapsible right sidebar with a
+  transcript of insights and Q&A, themed from the terminal palette.
+- **`Assistant/AssistantController.swift`** — subscribes to finished commands,
+  decides what deserves comment, routes questions with the last three commands
+  as context.
+- Toggle with `Cmd+Shift+A`. Auto-collapses below a 900pt window width and
+  comes back when there is room, unless the user closed it themselves.
+- `assistantInsights` is `off` / `failures` / `all`, defaulting to `failures`:
+  commentary after every successful command is mostly noise and a standing cost.
+
+Verified against the real shell — commands, exit codes, stderr and durations all
+captured correctly, and a failing `ls` produces a correct diagnosis from both
+qwen3:4b and Apple's on-device model.
+
+Three things this surfaced:
+
+1. **`PROMPT_SP` leaks into captured output.** zsh writes `%` plus padding
+   before drawing the next prompt, and on this machine that lands *before* the
+   `D` mark, so it fell inside the command's own output. Harmless on screen,
+   pure wasted context once records are fed to a model. Trimmed at record close.
+2. **The free-form path was the one place without schema protection, and it
+   broke immediately.** Asked for a two-sentence insight, qwen3:4b returned
+   eleven paragraphs of chain-of-thought. `answer` is now schema-constrained on
+   both providers like the other two entry points, plus a `ReplyCleaner` for the
+   `<think>` tag variants a schema cannot catch because the tags land inside the
+   field.
+3. **Small models over-use an escape hatch.** The insight prompt offered
+   "reply NOTHING if there is nothing to say"; qwen3:4b used it on `ls` against
+   a path that does not exist — the exact case the feature exists for. The
+   opt-out is now offered only for commands that succeeded.
+
+Apple's on-device model performs *well* here, unlike at command generation.
+Explanation and summarisation are what a 3B model is suited to, which is the
+concrete argument for tiering by task rather than picking one provider — still
+to build.
+
 ### Phase 2 — Close the honest gaps
 
 Small, mechanical, and each one is a thing an existing user would notice missing.

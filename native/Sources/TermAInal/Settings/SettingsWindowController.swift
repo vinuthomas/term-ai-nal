@@ -21,6 +21,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let baseUrlField = NSTextField()
     private let refreshModelsButton = NSButton()
     private let availabilityLabel = NSTextField(wrappingLabelWithString: "")
+    private let assistantEnabledCheckbox = NSButton()
+    private let assistantInsightsPopup = NSPopUpButton()
     private var aiGrid: NSGridView!
 
     // Terminal tab
@@ -69,6 +71,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     /// string, and letting it fall through to the first listed family meant
     /// opening Settings and saving silently replaced the automatic font.
     private static let automaticFont = "Automatic (best Unicode coverage)"
+
+    /// Index-aligned with the Insights popup's items.
+    private static let insightModes = ["off", "failures", "all"]
 
     init() {
         draft = SettingsStore.shared.settings
@@ -187,6 +192,15 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         availabilityLabel.textColor = .secondaryLabelColor
         availabilityLabel.preferredMaxLayoutWidth = 340
 
+        assistantEnabledCheckbox.setButtonType(.switch)
+        assistantEnabledCheckbox.title = "Show the assistant sidebar"
+
+        assistantInsightsPopup.addItem(withTitle: "Never")
+        assistantInsightsPopup.addItem(withTitle: "After a command fails")
+        assistantInsightsPopup.addItem(withTitle: "After every command")
+
+        // Appended last on purpose: updateProviderVisibility() addresses grid
+        // rows 1-5 by index, so new rows must go after them.
         aiGrid = form([
             ("Provider", providerPopup),
             ("Apple Model", appleModelPopup),
@@ -194,6 +208,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             ("API Key", apiKeyField),
             ("Model", modelRow),
             ("Base URL", baseUrlField),
+            ("Assistant", assistantEnabledCheckbox),
+            ("Insights", assistantInsightsPopup),
         ])
         return wrap(aiGrid)
     }
@@ -325,6 +341,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         featureGetActiveOutput.state = draft.mcpFeatures.getActiveTerminalOutput ? .on : .off
         featureSendInput.state = draft.mcpFeatures.sendInputToTerminal ? .on : .off
 
+        assistantEnabledCheckbox.state = draft.assistantEnabled ? .on : .off
+        assistantInsightsPopup.selectItem(at: Self.insightModes.firstIndex(of: draft.assistantInsights) ?? 1)
+
         updateProviderVisibility()
         updateMcpUrl()
         updateAvailability()
@@ -353,6 +372,11 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             draft.theme = TerminalThemes.all[themeIndex].key
         }
         draft.restoreSession = restoreSessionCheckbox.state == .on
+        draft.assistantEnabled = assistantEnabledCheckbox.state == .on
+        let insightIndex = assistantInsightsPopup.indexOfSelectedItem
+        if Self.insightModes.indices.contains(insightIndex) {
+            draft.assistantInsights = Self.insightModes[insightIndex]
+        }
 
         draft.mcpEnabled = mcpEnabledCheckbox.state == .on
         // Reject a nonsense port rather than letting the listener fail silently.

@@ -5,7 +5,7 @@ import SwiftTerm
 /// listener in `App.tsx`: on AppKit, shortcuts are menu-item key equivalents,
 /// which get "don't fire while a text field is focused" behaviour for free
 /// instead of the renderer's manual `isInputFocused` guard.
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow!
     /// Built in `applicationDidFinishLaunching`, once settings are loaded and
     /// any saved session is available to restore from.
@@ -14,6 +14,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Held while the sheet is up; released when it closes.
     private var palette: AIPaletteController?
     private var settingsController: SettingsWindowController?
+
+    private let assistant = AssistantController()
+    private let mainSplit = NSSplitView()
+    /// Distinguishes "the user collapsed the sidebar" from "the window is too
+    /// narrow to show it", so widening the window does not resurrect a sidebar
+    /// the user deliberately closed.
+    private var userCollapsedSidebar = false
+    /// Below this the sidebar would leave too little room for the terminal.
+    private static let sidebarMinimumWindowWidth: CGFloat = 900
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         SettingsStore.shared.load()
@@ -45,6 +54,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        // Remember a dragged sidebar width.
+        if sidebarVisible {
+            var settings = SettingsStore.shared.settings
+            let width = assistant.sidebar.frame.width
+            if width > 100 {
+                settings.assistantSidebarWidth = Double(width)
+                SettingsStore.shared.save(settings)
+            }
+        }
         if SettingsStore.shared.settings.restoreSession {
             SessionStore.save(panes.captureSession())
         }
@@ -67,19 +85,78 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titleVisibility = .hidden
         applyWindowBackground()
 
+        mainSplit.isVertical = true
+        mainSplit.dividerStyle = .thin
+        mainSplit.translatesAutoresizingMaskIntoConstraints = false
+        mainSplit.addArrangedSubview(panes.containerView)
+        mainSplit.addArrangedSubview(assistant.sidebar)
+        // The terminal absorbs window resizing; the sidebar keeps its width.
+        mainSplit.setHoldingPriority(.defaultHigh, forSubviewAt: 1)
+
+        assistant.activePaneId = { [weak self] in self?.panes.activePaneId }
+        assistant.onCollapseRequested = { [weak self] in self?.setSidebarVisible(false, byUser: true) }
+
+        let settings = SettingsStore.shared.settings
+        assistant.sidebar.applyTheme(TerminalThemes.theme(forKey: settings.theme))
+        // Start collapsed unless the assistant is on and there is room for it.
+        userCollapsedSidebar = !settings.assistantEnabled
+        assistant.sidebar.isHidden = true
+
         let content = NSView()
-        content.addSubview(panes.containerView)
+        content.addSubview(mainSplit)
         NSLayoutConstraint.activate([
-            panes.containerView.leadingAnchor.constraint(equalTo: content.leadingAnchor),
-            panes.containerView.trailingAnchor.constraint(equalTo: content.trailingAnchor),
+            mainSplit.leadingAnchor.constraint(equalTo: content.leadingAnchor),
+            mainSplit.trailingAnchor.constraint(equalTo: content.trailingAnchor),
             // Leave the transparent titlebar strip free so the window stays draggable,
             // replacing the renderer's WebkitAppRegion drag areas.
-            panes.containerView.topAnchor.constraint(equalTo: content.topAnchor, constant: 28),
-            panes.containerView.bottomAnchor.constraint(equalTo: content.bottomAnchor),
+            mainSplit.topAnchor.constraint(equalTo: content.topAnchor, constant: 28),
+            mainSplit.bottomAnchor.constraint(equalTo: content.bottomAnchor),
         ])
         window.contentView = content
+        window.delegate = self
         window.center()
         window.makeKeyAndOrderFront(nil)
+
+        if settings.assistantEnabled {
+            setSidebarVisible(true, byUser: false)
+        }
+    }
+
+    // MARK: - Assistant sidebar
+
+    private var sidebarVisible: Bool { !assistant.sidebar.isHidden }
+
+    /// `byUser` records intent: an automatic collapse because the window got
+    /// narrow must be reversible, an explicit one must not be undone silently.
+    private func setSidebarVisible(_ visible: Bool, byUser: Bool) {
+        if byUser { userCollapsedSidebar = !visible }
+        guard visible != sidebarVisible else { return }
+
+        if visible {
+            guard window.frame.width >= Self.sidebarMinimumWindowWidth else { return }
+            assistant.sidebar.isHidden = false
+            let width = CGFloat(SettingsStore.shared.settings.assistantSidebarWidth)
+            mainSplit.setPosition(window.frame.width - width, ofDividerAt: 0)
+            assistant.sidebar.focusInput()
+        } else {
+            assistant.sidebar.isHidden = true
+        }
+        mainSplit.adjustSubviews()
+    }
+
+    @objc private func toggleAssistant() {
+        setSidebarVisible(!sidebarVisible, byUser: true)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        // Hide when there is no room; bring it back only if the user did not
+        // close it themselves.
+        if window.frame.width < Self.sidebarMinimumWindowWidth {
+            if sidebarVisible { setSidebarVisible(false, byUser: false) }
+        } else if !sidebarVisible, !userCollapsedSidebar,
+                  SettingsStore.shared.settings.assistantEnabled {
+            setSidebarVisible(true, byUser: false)
+        }
     }
 
     /// Matches the window's background to the active theme so the per-pane
@@ -195,6 +272,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let aiMenu = NSMenu(title: "AI")
         addItem(to: aiMenu, "Command Palette…", #selector(openAIPalette), "p", [.command, .shift])
         addItem(to: aiMenu, "Task Planner…", #selector(openTaskPlanner), "m", [.command, .shift])
+        aiMenu.addItem(.separator())
+        addItem(to: aiMenu, "Toggle Assistant Sidebar", #selector(toggleAssistant), "a", [.command, .shift])
         aiMenuItem.submenu = aiMenu
         mainMenu.addItem(aiMenuItem)
 
@@ -265,6 +344,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         applyBufferSettings()
         applyWindowBackground()
         panes.applyAppearanceToAll()
+        let settings = SettingsStore.shared.settings
+        assistant.sidebar.applyTheme(TerminalThemes.theme(forKey: settings.theme))
+        if !settings.assistantEnabled {
+            setSidebarVisible(false, byUser: true)
+        }
         restartMcpServer()
         settingsController = nil
     }

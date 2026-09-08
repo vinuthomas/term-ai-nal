@@ -24,6 +24,37 @@ struct PlanStep {
 protocol AIProvider {
     func suggestCommand(request: String, cwd: String?) async throws -> CommandSuggestion
     func plan(goal: String, cwd: String) async throws -> [PlanStep]
+
+    /// Free-form prose, for the assistant sidebar. Deliberately unstructured:
+    /// unlike the two above there is no shape to enforce, and forcing a schema
+    /// on an explanation only makes it worse.
+    func answer(question: String, context: String) async throws -> String
+}
+
+/// Cleans prose replies from models that narrate their reasoning.
+///
+/// Reasoning models are a bad fit for this app but users will point it at them
+/// anyway — qwen3 in particular emits its full chain of thought, and Ollama's
+/// `think: false` does not reliably suppress it. Schema-constrained output is
+/// the real defence (see `answer` on both providers); this handles the tagged
+/// variants a schema cannot catch because the tags land *inside* the field.
+enum ReplyCleaner {
+    static func clean(_ text: String) -> String {
+        var result = text
+
+        // <think>…</think>, <thinking>…</thinking>, and an unclosed opener.
+        for tag in ["think", "thinking", "reasoning"] {
+            while let open = result.range(of: "<\(tag)>", options: .caseInsensitive) {
+                if let close = result.range(of: "</\(tag)>", options: .caseInsensitive, range: open.upperBound..<result.endIndex) {
+                    result.removeSubrange(open.lowerBound..<close.upperBound)
+                } else {
+                    // Unclosed: everything after the opener is reasoning.
+                    result.removeSubrange(open.lowerBound..<result.endIndex)
+                }
+            }
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 }
 
 enum AppleIntelligenceAvailability {
@@ -126,6 +157,49 @@ enum AIService {
 /// generation makes the formatting rules (rules 1–4 of `callAI`, rules 1–3 of
 /// `callAIPlan`) unnecessary, so those live in `strictFormat*` and are appended
 /// only by providers that must parse free text.
+extension AIPrompts {
+    /// The sidebar assistant's brief. Kept terse on purpose — long, hedged
+    /// answers are worse than short ones when the reader is mid-task at a
+    /// prompt, and the small local and on-device models this app targets
+    /// degrade badly when asked to be expansive.
+    static func assistantPreamble() -> String {
+        """
+        You are a terminal assistant embedded in a macOS terminal, running on \(AIService.systemInfo).
+        You are shown what the user ran and what it printed, and you comment on it or answer questions.
+
+        RULES:
+        1. Be brief. Two or three sentences unless asked for more.
+        2. No markdown headers, no bullet lists, no code fences. Plain prose, with commands inline.
+        3. If a command failed, say what went wrong and the single most likely fix.
+        4. Never invent output the user did not show you.
+        5. If the context is insufficient, say so in one sentence instead of guessing.
+        """
+    }
+
+    /// Frames a finished command for an unprompted observation.
+    static func insightPrompt(command: String, exitCode: Int32?, output: String) -> String {
+        let status = exitCode.map { $0 == 0 ? "succeeded (exit 0)" : "failed (exit \($0))" } ?? "finished"
+        // The opt-out is only offered for a command that worked. A small model
+        // reaches for an escape hatch readily — offered one on a real failure,
+        // qwen3:4b answered NOTHING for `ls` on a path that does not exist,
+        // which is the single case the feature exists to cover.
+        let failed = (exitCode ?? 0) != 0
+        let closing = failed
+            ? "In two sentences or fewer, give the likely cause and the single most likely fix. Answer directly; do not decline."
+            : "In two sentences or fewer, tell the user the single most useful thing about this result. If nothing is worth saying, reply exactly: NOTHING."
+        return """
+        The user ran this command, which \(status):
+
+        $ \(command)
+
+        Output:
+        \(output.isEmpty ? "(no output)" : output)
+
+        \(closing)
+        """
+    }
+}
+
 enum AIPrompts {
     static func commandPreamble() -> String {
         """

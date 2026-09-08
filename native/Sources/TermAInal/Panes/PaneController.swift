@@ -207,6 +207,9 @@ final class PaneController {
         }
         terminal.onOutput = { text in
             OutputBuffer.shared.append(paneId: paneId, text: text)
+            // Same stream, two consumers: a flat buffer for MCP reads and a
+            // structured command log for the assistant.
+            CommandLog.shared.ingest(paneId: paneId, text: text)
         }
         terminal.onProcessExit = { [weak self] _ in
             // The shell exited on its own (`exit`, Ctrl-D) — mirror the Electron

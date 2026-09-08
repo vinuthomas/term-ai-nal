@@ -28,6 +28,12 @@ struct GeneratedPlanStep {
     var explanation: String
 }
 
+@Generable(description: "A brief prose answer for a terminal user")
+struct GeneratedAnswer {
+    @Guide(description: "The answer, at most three sentences. Plain prose, no markdown, no reasoning narration.")
+    var answer: String
+}
+
 @Generable(description: "An ordered plan of shell commands accomplishing the user's task")
 struct GeneratedPlan {
     /// The step cap was prompt-only guidance in `callAIPlan`; as a guide it is
@@ -102,6 +108,18 @@ struct AppleIntelligenceProvider: AIProvider {
             command: command,
             explanation: generated.explanation.trimmingCharacters(in: .whitespacesAndNewlines)
         )
+    }
+
+    func answer(question: String, context: String) async throws -> String {
+        try requireAvailable()
+        let session = LanguageModelSession(instructions: AIPrompts.assistantPreamble())
+        // Schema-constrained like the other two entry points: it keeps the reply
+        // to the field and leaves no room for narration around it.
+        let response = try await session.respond(
+            to: context.isEmpty ? question : "\(context)\n\n\(question)",
+            generating: GeneratedAnswer.self
+        )
+        return ReplyCleaner.clean(response.content.answer)
     }
 
     func plan(goal: String, cwd: String) async throws -> [PlanStep] {

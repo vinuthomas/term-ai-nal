@@ -56,6 +56,38 @@ struct OpenAICompatibleProvider: AIProvider {
         return constrained == .none ? try Self.parseCommand(text) : try Self.decodeCommand(text)
     }
 
+    func answer(question: String, context: String) async throws -> String {
+        let constrained = schemaSupport
+        let text = try await complete(
+            system: AIPrompts.assistantPreamble(),
+            user: context.isEmpty ? question : "\(context)\n\n\(question)",
+            schema: constrained == .none ? nil : Self.answerSchema
+        )
+        guard constrained != .none,
+              let data = Self.stripCodeFence(text).data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(SchemaAnswer.self, from: data)
+        else {
+            return ReplyCleaner.clean(text)
+        }
+        return ReplyCleaner.clean(decoded.answer)
+    }
+
+    private static let answerSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "answer": [
+                "type": "string",
+                "description": "The answer, at most three sentences. Plain prose, no markdown, no reasoning narration.",
+            ],
+        ],
+        "required": ["answer"],
+        "additionalProperties": false,
+    ]
+
+    private struct SchemaAnswer: Decodable {
+        let answer: String
+    }
+
     func plan(goal: String, cwd: String) async throws -> [PlanStep] {
         let constrained = schemaSupport
         let text = try await complete(
@@ -114,7 +146,7 @@ struct OpenAICompatibleProvider: AIProvider {
     }
 
     private static func decodeCommand(_ text: String) throws -> CommandSuggestion {
-        guard let data = stripCodeFence(text).data(using: .utf8),
+        guard let data = Self.stripCodeFence(text).data(using: .utf8),
               let decoded = try? JSONDecoder().decode(SchemaCommand.self, from: data) else {
             // Fall back to the prose parser: a schema is a strong constraint,
             // not a proof, and some servers ignore the field entirely.
@@ -127,7 +159,7 @@ struct OpenAICompatibleProvider: AIProvider {
     }
 
     private static func decodePlan(_ text: String) throws -> [PlanStep] {
-        guard let data = stripCodeFence(text).data(using: .utf8),
+        guard let data = Self.stripCodeFence(text).data(using: .utf8),
               let decoded = try? JSONDecoder().decode(SchemaPlan.self, from: data) else {
             return try parsePlan(text)
         }
