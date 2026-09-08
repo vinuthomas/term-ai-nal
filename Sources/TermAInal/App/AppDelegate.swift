@@ -271,12 +271,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSMe
         let server = MCPServer(
             port: settings.mcpPort,
             features: settings.mcpFeatures,
-            // Not `mcpAuthToken` directly: that provisions (and may prompt
-            // for) a real keychain-backed token unconditionally, which ran on
-            // every launch regardless of whether MCP was ever used. This
-            // stays ephemeral and silent until the user actually opens the
-            // MCP settings tab.
-            authToken: SettingsStore.shared.effectiveMcpAuthToken,
+            // A plain file, not the keychain (see mcpAuthTokenURL) — and
+            // this whole call only runs when mcpEnabled is on, which is
+            // off by default, so it's not touched by a user who hasn't
+            // opted in either way.
+            authToken: SettingsStore.shared.mcpAuthToken,
             requireInputConfirmation: settings.mcpRequireConfirmationForInput
         )
 

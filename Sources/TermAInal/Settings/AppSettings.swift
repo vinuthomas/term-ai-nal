@@ -287,14 +287,32 @@ final class SettingsStore {
         KeychainStore.set(key, account: "apiKey.\(provider)")
     }
 
-    /// Shared secret an MCP client must present as `Authorization: Bearer
-    /// <token>`. Lives in the keychain, never in `settings.json` — the same
-    /// reasoning as API keys: a credential belongs there, not in a plaintext
-    /// file. Generated once, on first access, and reused across launches so a
-    /// client's config does not go stale every restart.
+    /// Where the MCP bearer token lives: a 0600 file next to `settings.json`,
+    /// the same convention `MCPAuditLog` uses — not the keychain.
+    ///
+    /// This used to be a keychain item, on the same reasoning as API keys: a
+    /// credential belongs there, not in a plaintext file. But this credential
+    /// is different in kind — it authenticates loopback HTTP requests to a
+    /// server *we* run, not access to a third-party service, so there is no
+    /// third party for the keychain's code-identity trust model to protect
+    /// against. That model actively backfired here: an ad-hoc-signed app's
+    /// designated requirement changes on every rebuild (fixed separately with
+    /// a stable `identifier` requirement, but even that only covers rebuilds
+    /// at the *same install path*), and macOS's "Allow" grants access exactly
+    /// once — only "Always Allow" persists it — so a user who clicked the
+    /// more prominent "Allow" button on a routine upgrade prompt found
+    /// themselves re-prompted on every subsequent launch, forever, with no
+    /// way to know that was the reason. A plain file this app owns outright
+    /// sidesteps that entire class of problem.
+    var mcpAuthTokenURL: URL {
+        settingsURL.deletingLastPathComponent().appendingPathComponent("mcp-token")
+    }
+
+    /// Generated once, on first access, and reused across launches so an
+    /// external client's config does not go stale every restart.
     var mcpAuthToken: String {
-        if let existing = KeychainStore.get(account: "mcpAuthToken"), !existing.isEmpty {
-            markMcpAuthTokenProvisioned()
+        if let existing = try? String(contentsOf: mcpAuthTokenURL, encoding: .utf8),
+           !existing.isEmpty {
             return existing
         }
         return regenerateMcpAuthToken()
@@ -307,46 +325,10 @@ final class SettingsStore {
     @discardableResult
     func regenerateMcpAuthToken() -> String {
         let token = Self.randomToken()
-        KeychainStore.set(token, account: "mcpAuthToken")
-        markMcpAuthTokenProvisioned()
+        let url = mcpAuthTokenURL
+        try? token.write(to: url, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
         return token
-    }
-
-    private static let mcpAuthTokenProvisionedKey = "mcpAuthTokenProvisioned"
-
-    /// Whether a real token has ever been provisioned — checked through
-    /// `UserDefaults`, never the keychain, so checking it can never itself
-    /// trigger an access prompt.
-    private var hasProvisionedMcpAuthToken: Bool {
-        UserDefaults.standard.bool(forKey: Self.mcpAuthTokenProvisionedKey)
-    }
-
-    private func markMcpAuthTokenProvisioned() {
-        UserDefaults.standard.set(true, forKey: Self.mcpAuthTokenProvisionedKey)
-    }
-
-    /// One random value per process launch, generated locally and never
-    /// written anywhere — used as the MCP server's auth requirement until a
-    /// real token is provisioned. `mcpAuthToken` regenerating this on every
-    /// call would make the server reject its own previously issued value
-    /// mid-session, so it is computed once and cached.
-    private static let ephemeralMcpAuthToken = randomToken()
-
-    /// What the MCP server should actually require right now. Touches the
-    /// keychain — and so can prompt for the login password to authorize
-    /// access — only if a token has already been provisioned; otherwise this
-    /// is a per-launch value that never touches the keychain at all.
-    ///
-    /// This is deliberately *not* what `restartMcpServer` used to call
-    /// directly: that read the persisted token unconditionally at every
-    /// launch, so every user got an OS keychain prompt on first run whether
-    /// or not they ever touched MCP. The token's value is only ever exposed
-    /// through the MCP Settings tab — nothing can configure an external
-    /// client without opening it first — so that tab populating its token
-    /// field (via `mcpAuthToken` above) is what promotes this from ephemeral
-    /// to persisted, and prompts only for someone who actually got there.
-    var effectiveMcpAuthToken: String {
-        hasProvisionedMcpAuthToken ? mcpAuthToken : Self.ephemeralMcpAuthToken
     }
 
     private static func randomToken(bytes: Int = 32) -> String {

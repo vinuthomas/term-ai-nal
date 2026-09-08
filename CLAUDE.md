@@ -137,16 +137,24 @@ shell in a background tab is live and an agent may be driving it. Every tool bra
 human-readable text, errors included, so clients never special-case failure.
 
 Every request needs `Authorization: Bearer <token>`, checked in `route()` before any handler
-runs. `restartMcpServer()` passes `SettingsStore.effectiveMcpAuthToken`, *not*
-`.mcpAuthToken` directly — the latter provisions a real token in the keychain, which can
-prompt for the login password the first time a given code identity or install path reads it
-back. Doing that unconditionally at launch meant every user got an OS keychain prompt on
-first run whether or not they ever touched MCP. `effectiveMcpAuthToken` instead returns a
-per-launch random value that never touches the keychain until a token has actually been
-provisioned — which only happens by opening the MCP Settings tab (`mcpAuthToken` there,
-via `syncFromDraft`), the only place the token's value is ever exposed, so nothing can
-configure an external client without hitting that path first. Responses carry no
-`Access-Control-Allow-*` headers at all, on purpose: earlier builds
+runs. `SettingsStore.mcpAuthToken` (`AppSettings.swift`) lives in a 0600 file next to
+`settings.json` (`mcpAuthTokenURL`), not the keychain — it went through two revisions before
+landing there. First pass: keychain, same reasoning as API keys. That backfired, because this
+credential authenticates loopback requests to a server *we* run, not a third party, so there
+was no third party for the keychain's code-identity trust model to protect against — and that
+model actively got in the way. An ad-hoc-signed app's designated requirement changes on every
+rebuild by default (fixed with a stable `identifier` requirement, but that only covers rebuilds
+at the *same install path*), and macOS's "Allow" grants access exactly once — only
+"Always Allow" persists it — so a user who clicked the more prominent "Allow" on a routine
+upgrade prompt got re-prompted on every subsequent launch, forever, with no way to know why.
+Second pass: kept the keychain but deferred touching it until the user opened the MCP Settings
+tab, on the theory that at least the prompt would be self-explanatory. Still shipped the same
+underlying bug for anyone who clicked "Allow" instead of "Always Allow" there. The actual fix
+was to stop asking the OS to broker trust for a secret this app both creates and consumes
+itself — a plain file it owns outright, same convention `MCPAuditLog` already used, sidesteps
+the entire class of problem. `restartMcpServer()` only reads it at all when `mcpEnabled` is on,
+which is off by default, so a user who never opts in never touches this file either. Responses
+carry no `Access-Control-Allow-*` headers at all, on purpose: earlier builds
 sent a wildcard `Access-Control-Allow-Origin: *`, which combined with no authentication meant
 any JavaScript running in any browser tab on the machine could call `send_input_to_terminal`
 with zero interaction from the user — an MCP client is a local agent process, never a browser,
