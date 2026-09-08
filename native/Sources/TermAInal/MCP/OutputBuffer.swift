@@ -110,7 +110,10 @@ enum ANSIStripper {
         pattern: "\u{1b}\\][^\u{07}\u{1b}]*(?:\u{07}|\u{1b}\\\\)"
             + "|\u{1b}\\[[0-9;?]*[A-Za-z]"
             + "|\u{1b}[()][0-9A-Za-z]"
-            + "|\u{1b}[DEMOST=>]"
+            // Single-character escapes. `7`/`8` (DECSC/DECRC save and restore
+            // cursor) were missing and leaked into MCP reads as literal
+            // ESC-7/ESC-8 — Powerlevel10k emits them around every prompt.
+            + "|\u{1b}[78cDEHMOSTZ=><]"
             + "|[\u{07}\u{08}\r]"
     )
 
