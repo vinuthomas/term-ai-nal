@@ -198,6 +198,33 @@ Both were invisible to the headless checks and to `swift build` — the lesson i
 that a "port of X" comment is worth little unless the *reason* X looked odd is
 carried across with it.
 
+## Theme contrast is enforced, not eyeballed
+
+`TermAInal --check-contrast` prints WCAG contrast ratios for the sidebar's
+derived colours across every built-in theme and exits non-zero if any falls
+below its floor (body and dim text 4.5:1, accent 3:1, and a 0.029 luminance step
+between a card and the sidebar behind it).
+
+It exists because deriving colours by fixed blend fractions cannot work across
+themes, and shipped visibly broken. A proportional shift means something
+different on `#002b36` than on `#282a36`, and Solarized Dark's foreground
+(`#839496`) is deliberately low-contrast before anything is done to it:
+
+| theme | dim text before | after |
+|---|---|---|
+| default | 4.91 | 6.17 |
+| dracula | 4.18 | 5.15 |
+| solarized-dark | **1.93** | 4.72 |
+| one-dark | **2.44** | 4.69 |
+
+Card surfaces were 0.012–0.015 luminance from the sidebar behind them, i.e.
+invisible; they are now at least 0.030. Solarized Dark's *body* text was also
+below the floor at 3.65:1.
+
+The lesson is the same one the environment and font regressions taught: a
+derived value needs a guaranteed floor, not a plausible-looking formula. Run
+this after touching `Palette` or adding a theme.
+
 ## Verifying pane reuse
 
 The most fragile invariant in the app is that a relayout re-parents terminals

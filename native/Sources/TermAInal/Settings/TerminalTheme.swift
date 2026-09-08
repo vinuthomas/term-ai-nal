@@ -194,3 +194,36 @@ extension NSColor {
         )
     }
 }
+
+extension NSColor {
+    /// Whether AppKit should draw controls over this colour in dark mode.
+    /// Rec. 709 luma is adequate here — the decision is binary.
+    var isDarkForControls: Bool {
+        let srgb = usingColorSpace(.sRGB) ?? self
+        let luma = 0.2126 * srgb.redComponent
+            + 0.7152 * srgb.greenComponent
+            + 0.0722 * srgb.blueComponent
+        return luma < 0.5
+    }
+}
+
+extension NSColor {
+    /// WCAG relative luminance — gamma-corrected, unlike a plain Rec. 709 luma.
+    /// Contrast ratios are defined in terms of it.
+    var relativeLuminance: CGFloat {
+        let srgb = usingColorSpace(.sRGB) ?? self
+        func linear(_ c: CGFloat) -> CGFloat {
+            c <= 0.03928 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+        }
+        return 0.2126 * linear(srgb.redComponent)
+            + 0.7152 * linear(srgb.greenComponent)
+            + 0.0722 * linear(srgb.blueComponent)
+    }
+
+    /// WCAG contrast ratio, 1...21.
+    func contrastRatio(against other: NSColor) -> CGFloat {
+        let a = relativeLuminance
+        let b = other.relativeLuminance
+        return (max(a, b) + 0.05) / (min(a, b) + 0.05)
+    }
+}

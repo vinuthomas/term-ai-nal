@@ -164,6 +164,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func applyWindowBackground() {
         let theme = TerminalThemes.theme(forKey: SettingsStore.shared.settings.theme)
         window.backgroundColor = theme.background
+        // Standard controls draw their bezels, scrollers and text-field
+        // backgrounds from the window's appearance, not from whatever colour we
+        // painted behind them. Without this a dark theme under a light system
+        // appearance gives light bezels on a dark ground and vice versa.
+        window.appearance = NSAppearance(named: theme.background.isDarkForControls ? .darkAqua : .aqua)
     }
 
     private func applyBufferSettings() {

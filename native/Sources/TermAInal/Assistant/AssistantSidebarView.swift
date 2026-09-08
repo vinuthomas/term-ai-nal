@@ -114,6 +114,11 @@ final class AssistantSidebarView: NSView {
         input.action = #selector(submit)
 
         sendButton.title = "Send"
+        // Same bezel as "Explain Last". A plain push button drew no visible
+        // bezel against a themed background, leaving Send as bare text.
+        // Deliberately not given a Return key equivalent: as the window's
+        // default button it would fire on Return while typing in the terminal.
+        sendButton.bezelStyle = .accessoryBarAction
         sendButton.controlSize = .small
         sendButton.target = self
         sendButton.action = #selector(submit)
@@ -334,25 +339,39 @@ final class AssistantSidebarView: NSView {
         let failureAccent: NSColor
 
         init(theme: TerminalTheme) {
-            let background = theme.background
-            isDark = background.perceivedLuminance < 0.5
-            // The sidebar sits a touch off the terminal background so the
-            // divider between them is legible without an extra rule.
-            self.background = background.shifted(towardLight: isDark, by: 0.04)
-            surfaceFill = background.shifted(towardLight: isDark, by: 0.09)
-            raisedFill = background.shifted(towardLight: isDark, by: 0.15)
-            text = theme.foreground
-            // Blending the foreground into the background, rather than lowering
-            // alpha, keeps captions readable over the card fills.
-            dimText = theme.foreground.blended(withFraction: 0.42, of: background) ?? theme.foreground
+            let base = theme.background
+            isDark = base.perceivedLuminance < 0.5
+
+            // Every step below is a guaranteed minimum rather than a fixed
+            // blend fraction, because a proportional shift means something
+            // different on #002b36 than on #282a36 — and on the former it meant
+            // nothing at all.
+            let sidebar = base.shifted(towardLight: isDark, by: 0.05)
+            background = sidebar
+            surfaceFill = sidebar.separated(from: sidebar, byLuminance: 0.030)
+            raisedFill = surfaceFill.separated(from: surfaceFill, byLuminance: 0.035)
+
+            // 4.5:1 is the WCAG floor for body-size text; the labels and
+            // captions are small, so they get the same floor rather than the
+            // 3:1 allowed for large text.
+            text = theme.foreground.ensuringContrast(atLeast: 4.5, on: surfaceFill)
+            dimText = theme.foreground
+                .blended(withFraction: 0.30, of: surfaceFill)?
+                .ensuringContrast(atLeast: 4.5, on: surfaceFill)
+                ?? text
 
             // ANSI slots carry the theme's own idea of these hues; bright
             // variants are used so accents survive a light background too.
+            // 3:1 is the floor for a non-text indicator such as the stripe.
             let ansi = theme.ansi
-            questionAccent = theme.cursor
-            answerAccent = ansi.indices.contains(12) ? ansi[12] : .systemBlue
-            successAccent = ansi.indices.contains(10) ? ansi[10] : .systemGreen
-            failureAccent = ansi.indices.contains(9) ? ansi[9] : .systemRed
+            func accent(_ index: Int, fallback: NSColor) -> NSColor {
+                let colour = ansi.indices.contains(index) ? ansi[index] : fallback
+                return colour.ensuringContrast(atLeast: 3.0, on: sidebar)
+            }
+            questionAccent = theme.cursor.ensuringContrast(atLeast: 3.0, on: sidebar)
+            answerAccent = accent(12, fallback: .systemBlue)
+            successAccent = accent(10, fallback: .systemGreen)
+            failureAccent = accent(9, fallback: .systemRed)
         }
     }
 }
@@ -463,5 +482,45 @@ private extension NSColor {
     /// same layering reads correctly either way.
     func shifted(towardLight: Bool, by amount: CGFloat) -> NSColor {
         blended(withFraction: amount, of: towardLight ? .white : .black) ?? self
+    }
+
+    /// Pushes this colour away from `background` until it reaches `ratio`.
+    ///
+    /// Fixed blend fractions cannot work across themes: Solarized Dark's
+    /// foreground (#839496 on #002b36) is deliberately low-contrast to begin
+    /// with, so blending it 42% further toward the background — which is what
+    /// the caption and label colour used to do — left roughly 1.8:1 and the
+    /// labels were effectively invisible. Enforcing a floor instead adapts to
+    /// whatever the theme provides.
+    func ensuringContrast(atLeast ratio: CGFloat, on background: NSColor) -> NSColor {
+        guard contrastRatio(against: background) < ratio else { return self }
+
+        // Move towards whichever extreme is further from the background.
+        let towardLight = background.relativeLuminance < 0.5
+        var candidate = self
+        var amount: CGFloat = 0.05
+        while amount <= 1.0 {
+            candidate = shifted(towardLight: towardLight, by: amount)
+            if candidate.contrastRatio(against: background) >= ratio { return candidate }
+            amount += 0.05
+        }
+        // Unreachable target (a mid-grey background): take the extreme.
+        return towardLight ? .white : .black
+    }
+
+    /// Lifts this colour away from `other` until their luminance differs enough
+    /// to read as a distinct surface. On near-black backgrounds a proportional
+    /// blend produces almost no visible step, which is why the entry cards were
+    /// indistinguishable from the sidebar behind them.
+    func separated(from other: NSColor, byLuminance delta: CGFloat) -> NSColor {
+        let towardLight = other.relativeLuminance < 0.5
+        var candidate = self
+        var amount: CGFloat = 0
+        while amount <= 1.0 {
+            candidate = shifted(towardLight: towardLight, by: amount)
+            if abs(candidate.relativeLuminance - other.relativeLuminance) >= delta { return candidate }
+            amount += 0.02
+        }
+        return candidate
     }
 }
