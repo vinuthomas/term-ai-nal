@@ -105,6 +105,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         tabs.onSelectedTitleChange = { [weak self] title in
             self?.window.title = title
         }
+        // Ending the last session closes the window, which quits the app —
+        // the same thing Terminal.app and iTerm2 do when the last shell exits.
+        tabs.onLastTabClosed = { [weak self] in
+            self?.window.performClose(nil)
+        }
 
         let settings = SettingsStore.shared.settings
         let launchTheme = TerminalThemes.theme(forKey: settings.theme)

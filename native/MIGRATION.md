@@ -360,6 +360,25 @@ now sets the directory on the node before `rebuild()`, so it reaches
 `startProcess(currentDirectory:)` at spawn time — verified by checking
 `CommandLog` contains no `cd` for a newly opened tab in any of the four modes.
 
+### Ending a session
+
+Ctrl+D exits the shell, and what that closes depends on what is left:
+
+| state | Ctrl+D closes |
+|---|---|
+| a split pane | that pane, tab stays |
+| a tab with one pane, others open | that tab |
+| the only tab | the window, which quits the app |
+
+The last case was broken: `closeTab` refused when one tab remained, so the
+pane could not close either and the window sat there hosting a terminal whose
+process had already exited. `onLastTabClosed` now reports it and the app closes
+the window, matching Terminal.app and iTerm2.
+
+`--check-ctrld` walks all three levels, because the teardown chain runs
+pane → tab → window and a break anywhere in it leaves dead UI rather than an
+error.
+
 ### Titles
 
 Three levels, each showing what suits its width:

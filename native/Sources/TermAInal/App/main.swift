@@ -84,6 +84,43 @@ if CommandLine.arguments.contains("--check-locale") {
     LocaleDiagnostics.runAndExit()
 }
 
+if CommandLine.arguments.contains("--check-ctrld") {
+    _ = NSApplication.shared
+    SettingsStore.shared.load()
+    func pump(_ s: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
+
+    var lastTabClosed = false
+    let tabs = TabController()
+    tabs.onLastTabClosed = { lastTabClosed = true }
+    tabs.restore(nil)
+    pump(2.5)
+
+    // A split pane must absorb its own Ctrl+D without taking the tab with it.
+    tabs.activePanes?.splitActivePane(direction: .horizontal)
+    pump(2.5)
+    print("after split             : \(tabs.activePanes?.root.allPaneIds.count ?? 0) pane(s), \(tabs.tabs.count) tab(s)")
+    tabs.activePanes?.terminals[tabs.activePaneId ?? ""]?.sendToShell("\u{04}")
+    pump(3)
+    print("after Ctrl+D in split   : \(tabs.activePanes?.root.allPaneIds.count ?? 0) pane(s), \(tabs.tabs.count) tab(s)")
+
+    tabs.addTab()
+    pump(2.5)
+    print("tabs                    : \(tabs.tabs.count)")
+
+    // Ctrl+D (EOF) into the frontmost shell.
+    func sendEOF() {
+        tabs.activePanes?.terminals[tabs.activePaneId ?? ""]?.sendToShell("\u{04}")
+    }
+
+    sendEOF(); pump(3)
+    print("after Ctrl+D on tab 2   : \(tabs.tabs.count) tab(s), lastTabClosed=\(lastTabClosed)")
+
+    sendEOF(); pump(3)
+    print("after Ctrl+D on last    : \(tabs.tabs.count) tab(s), lastTabClosed=\(lastTabClosed)")
+    print(lastTabClosed && tabs.tabs.isEmpty ? "\nsession ends cleanly" : "\nFAILED: last tab did not end the session")
+    exit(lastTabClosed && tabs.tabs.isEmpty ? 0 : 1)
+}
+
 // SPM builds a bare executable, so the NSApplication lifecycle is set up by
 // hand rather than via @NSApplicationMain.
 let app = NSApplication.shared

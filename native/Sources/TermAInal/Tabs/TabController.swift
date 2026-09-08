@@ -48,6 +48,12 @@ final class TabController: NSObject, TabBarViewDelegate {
     /// titles were redirected to the tab bar.
     var onSelectedTitleChange: ((String) -> Void)?
 
+    /// The last tab has gone, so there is no session left to show.
+    ///
+    /// The controller cannot decide what that means — closing a window is the
+    /// app's business — so it reports it and lets the app act.
+    var onLastTabClosed: (() -> Void)?
+
     var activePaneId: String? { selectedTab?.panes.activePaneId }
     var selectedTab: TerminalTab? { tabs.indices.contains(selectedIndex) ? tabs[selectedIndex] : nil }
     var activePanes: PaneController? { selectedTab?.panes }
@@ -100,7 +106,8 @@ final class TabController: NSObject, TabBarViewDelegate {
         ])
     }
 
-    /// Recomputes the strip's contents and constraints from `tabs`.
+    /// Recomputes the strip's contents and constraints from `tabs`. Safe with
+    /// none, which happens briefly while the last tab is being torn down.
     private func rebuildStrip() {
         NSLayoutConstraint.deactivate(stripConstraints)
         stripConstraints = []
@@ -218,9 +225,19 @@ final class TabController: NSObject, TabBarViewDelegate {
 
     func closeTab(at index: Int) {
         guard tabs.indices.contains(index) else { return }
-        // Never leave the window empty; the app quits from the menu, not by
-        // closing the last tab out from under itself.
-        guard tabs.count > 1 else { return }
+
+        // Closing the only tab ends the session. Refusing used to leave a dead
+        // shell on screen: Ctrl+D exited the shell, the pane could not close
+        // because the tab could not close, and the window sat there hosting a
+        // terminal whose process was gone.
+        guard tabs.count > 1 else {
+            let tab = tabs.remove(at: index)
+            tab.panes.terminateAll()
+            tab.panes.containerView.removeFromSuperview()
+            rebuildStrip()
+            onLastTabClosed?()
+            return
+        }
 
         let tab = tabs.remove(at: index)
         tab.panes.terminateAll()
