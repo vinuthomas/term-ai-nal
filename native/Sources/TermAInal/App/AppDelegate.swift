@@ -105,7 +105,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         tabs.onSelectedTitleChange = { [weak self] title in
             self?.window.title = title
         }
-        assistant.onCollapseRequested = { [weak self] in self?.setSidebarVisible(false, byUser: true) }
 
         let settings = SettingsStore.shared.settings
         let launchTheme = TerminalThemes.theme(forKey: settings.theme)

@@ -13,7 +13,6 @@ final class AssistantController: NSObject, AssistantSidebarDelegate {
 
     /// Supplied by the app so the controller never reaches into the pane tree.
     var activePaneId: (() -> String?)?
-    var onCollapseRequested: (() -> Void)?
 
     /// One request at a time. An automatic insight is dropped rather than
     /// queued when something is already running: a burst of commands must not
@@ -102,10 +101,6 @@ final class AssistantController: NSObject, AssistantSidebarDelegate {
             ),
             context: ""
         )
-    }
-
-    func assistantSidebarDidRequestCollapse(_ sidebar: AssistantSidebarView) {
-        onCollapseRequested?()
     }
 
     // MARK: - Questions

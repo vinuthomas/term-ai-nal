@@ -7,7 +7,6 @@ protocol AssistantSidebarDelegate: AnyObject {
     /// User submitted a free-form question.
     func assistantSidebar(_ sidebar: AssistantSidebarView, didAsk question: String)
     /// User clicked the header's close control.
-    func assistantSidebarDidRequestCollapse(_ sidebar: AssistantSidebarView)
     /// User clicked "Explain the last command".
     func assistantSidebarDidRequestExplainLast(_ sidebar: AssistantSidebarView)
 }
@@ -30,7 +29,6 @@ final class AssistantSidebarView: NSView {
 
     private let titleLabel = NSTextField(labelWithString: "Assistant")
     private let explainButton = NSButton()
-    private let collapseButton = NSButton()
     private let headerSeparator = NSBox()
     private let footerSeparator = NSBox()
 
@@ -70,16 +68,6 @@ final class AssistantSidebarView: NSView {
         explainButton.font = .systemFont(ofSize: 11)
         explainButton.target = self
         explainButton.action = #selector(explainLast)
-
-        collapseButton.image = NSImage(
-            systemSymbolName: "sidebar.trailing",
-            accessibilityDescription: "Hide assistant"
-        )
-        collapseButton.isBordered = false
-        collapseButton.bezelStyle = .accessoryBar
-        collapseButton.toolTip = "Hide assistant"
-        collapseButton.target = self
-        collapseButton.action = #selector(collapse)
 
         for separator in [headerSeparator, footerSeparator] {
             separator.boxType = .separator
@@ -127,7 +115,7 @@ final class AssistantSidebarView: NSView {
         spinner.controlSize = .small
         spinner.isDisplayedWhenStopped = false
 
-        let header = NSStackView(views: [titleLabel, NSView(), explainButton, collapseButton])
+        let header = NSStackView(views: [titleLabel, NSView(), explainButton])
         header.orientation = .horizontal
         header.alignment = .centerY
         header.spacing = 6
@@ -241,7 +229,6 @@ final class AssistantSidebarView: NSView {
         titleLabel.textColor = palette.text
         input.textColor = palette.text
         input.backgroundColor = palette.raisedFill
-        collapseButton.contentTintColor = palette.dimText
 
         // Existing entries were coloured with the old palette, so re-render.
         for view in entryViews {
@@ -260,10 +247,6 @@ final class AssistantSidebarView: NSView {
         guard !question.isEmpty else { return }
         input.stringValue = ""
         delegate?.assistantSidebar(self, didAsk: question)
-    }
-
-    @objc private func collapse() {
-        delegate?.assistantSidebarDidRequestCollapse(self)
     }
 
     @objc private func explainLast() {
