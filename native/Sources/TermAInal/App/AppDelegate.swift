@@ -7,9 +7,11 @@ import SwiftTerm
 /// instead of the renderer's manual `isInputFocused` guard.
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var window: NSWindow!
-    /// Built in `applicationDidFinishLaunching`, once settings are loaded and
-    /// any saved session is available to restore from.
-    private var panes: PaneController!
+    private let tabs = TabController()
+
+    /// The pane layout of the frontmost tab. Menu actions operate on this;
+    /// background tabs keep running but are not the target of a shortcut.
+    private var panes: PaneController? { tabs.activePanes }
     private var mcpServer: MCPServer?
     /// Held while the sheet is up; released when it closes.
     private var palette: AIPaletteController?
@@ -31,20 +33,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // Only restore when the setting is on; otherwise drop any stale file so
         // turning the option off actually forgets the layout.
         let settings = SettingsStore.shared.settings
+        tabs.onActivePaneChange = { [weak self] paneId in
+            self?.mcpServer?.activePaneChanged(to: paneId)
+        }
         if settings.restoreSession {
-            panes = PaneController(restoring: SessionStore.load())
+            tabs.restore(SessionStore.load())
         } else {
             SessionStore.clear()
-            panes = PaneController()
+            tabs.restore(nil)
         }
 
         buildWindow()
         buildMenu()
         restartMcpServer()
-
-        panes.onActivePaneChange = { [weak self] paneId in
-            self?.mcpServer?.activePaneChanged(to: paneId)
-        }
 
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -64,7 +65,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         if SettingsStore.shared.settings.restoreSession {
-            SessionStore.save(panes.captureSession())
+            SessionStore.save(tabs.captureSession())
         }
         mcpServer?.stop()
         OutputBuffer.shared.cleanupAll()
@@ -88,16 +89,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainSplit.isVertical = true
         mainSplit.dividerStyle = .thin
         mainSplit.translatesAutoresizingMaskIntoConstraints = false
-        mainSplit.addArrangedSubview(panes.containerView)
+        mainSplit.addArrangedSubview(tabs.containerView)
         mainSplit.addArrangedSubview(assistant.sidebar)
         // The terminal absorbs window resizing; the sidebar keeps its width.
         mainSplit.setHoldingPriority(.defaultHigh, forSubviewAt: 1)
 
-        assistant.activePaneId = { [weak self] in self?.panes.activePaneId }
+        assistant.activePaneId = { [weak self] in self?.tabs.activePaneId }
         assistant.onCollapseRequested = { [weak self] in self?.setSidebarVisible(false, byUser: true) }
 
         let settings = SettingsStore.shared.settings
-        assistant.sidebar.applyTheme(TerminalThemes.theme(forKey: settings.theme))
+        let launchTheme = TerminalThemes.theme(forKey: settings.theme)
+        assistant.sidebar.applyTheme(launchTheme)
+        tabs.applyTheme(launchTheme)
         // Start collapsed unless the assistant is on and there is room for it.
         userCollapsedSidebar = !settings.assistantEnabled
         assistant.sidebar.isHidden = true
@@ -149,6 +152,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func windowDidResize(_ notification: Notification) {
+        // The slide offset is a multiple of the viewport width, so it must be
+        // recomputed rather than stored.
+        tabs.viewportResized()
+
         // Hide when there is no room; bring it back only if the user did not
         // close it themselves.
         if window.frame.width < Self.sidebarMinimumWindowWidth {
@@ -196,22 +203,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // separation the Electron build enforced with its `mcp-set-*` IPC push.
         server.panesProvider = { [weak self] in
             guard let self else { return [] }
-            return self.panes.root.allPanes.compactMap { node in
-                guard let paneId = node.paneId else { return nil }
-                return MCPPaneInfo(
-                    paneId: paneId,
-                    paneNumber: node.paneNumber ?? 0,
-                    label: node.label,
-                    cwd: self.panes.terminals[paneId]?.currentCwd ?? node.cwd
-                )
+            // Every tab, not just the visible one: a shell in a background tab
+            // is still live and an agent may be driving it.
+            var infos: [MCPPaneInfo] = []
+            var number = 1
+            for tab in self.tabs.tabs {
+                for node in tab.panes.root.allPanes {
+                    guard let paneId = node.paneId else { continue }
+                    infos.append(MCPPaneInfo(
+                        paneId: paneId,
+                        paneNumber: number,
+                        label: node.label ?? tab.title,
+                        cwd: tab.panes.terminals[paneId]?.currentCwd ?? node.cwd
+                    ))
+                    number += 1
+                }
             }
+            return infos
         }
-        server.activePaneIdProvider = { [weak self] in self?.activePaneId }
+        server.activePaneIdProvider = { [weak self] in self?.tabs.activePaneId }
         server.readBuffer = { paneId, maxLines in
             OutputBuffer.shared.read(paneId: paneId, maxLines: maxLines)
         }
         server.sendInput = { [weak self] paneId, text in
-            guard let terminal = self?.panes.terminals[paneId] else { return false }
+            guard let self,
+                  let terminal = self.tabs.tabs.compactMap({ $0.panes.terminals[paneId] }).first
+            else { return false }
             DispatchQueue.main.async { terminal.sendToShell(text) }
             return true
         }
@@ -223,8 +240,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             NSLog("[MCP] failed to start on port \(settings.mcpPort): \(error)")
         }
     }
-
-    private var activePaneId: String { panes.activePaneId }
 
     // MARK: - Menu
 
@@ -254,21 +269,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mainMenu.addItem(editMenuItem)
 
         // Shell menu — the split/close/focus shortcuts from App.tsx
+        // Cmd+T is New Tab and Cmd+1..9 select tabs, which is what every other
+        // macOS terminal does. The Electron build bound Cmd+T to split-right
+        // and the digits to panes; those move to Cmd+D and Cmd+Alt+digit.
         let shellMenuItem = NSMenuItem()
         let shellMenu = NSMenu(title: "Shell")
-        addItem(to: shellMenu, "Split Right", #selector(splitRight), "t", [.command])
-        addItem(to: shellMenu, "Split Down", #selector(splitDown), "t", [.command, .shift])
-        addItem(to: shellMenu, "Split Left", #selector(splitLeft), "t", [.command, .option])
-        addItem(to: shellMenu, "Split Up", #selector(splitUp), "t", [.command, .shift, .option])
+        addItem(to: shellMenu, "New Tab", #selector(newTab), "t", [.command])
+        addItem(to: shellMenu, "Close Tab", #selector(closeTab), "w", [.command, .shift])
         shellMenu.addItem(.separator())
+        addItem(to: shellMenu, "Next Tab", #selector(nextTab), "]", [.command, .shift])
+        addItem(to: shellMenu, "Previous Tab", #selector(previousTab), "[", [.command, .shift])
+        for number in 1...9 {
+            addItem(to: shellMenu, "Tab \(number)", #selector(selectTab(_:)), "\(number)", [.command], tag: number)
+        }
+        shellMenu.addItem(.separator())
+        addItem(to: shellMenu, "Split Right", #selector(splitRight), "d", [.command])
+        addItem(to: shellMenu, "Split Down", #selector(splitDown), "d", [.command, .shift])
+        addItem(to: shellMenu, "Split Left", #selector(splitLeft), "d", [.command, .option])
+        addItem(to: shellMenu, "Split Up", #selector(splitUp), "d", [.command, .shift, .option])
         addItem(to: shellMenu, "Close Pane", #selector(closePane), "w", [.command])
+        for number in 1...9 {
+            addItem(to: shellMenu, "Focus Pane \(number)", #selector(focusPane(_:)), "\(number)", [.command, .option], tag: number)
+        }
         shellMenu.addItem(.separator())
         addItem(to: shellMenu, "Clear Screen and Scrollback", #selector(clearAll), "k", [.command])
         addItem(to: shellMenu, "Clear Screen", #selector(clearScreen), "l", [.command])
-        shellMenu.addItem(.separator())
-        for number in 1...9 {
-            addItem(to: shellMenu, "Focus Pane \(number)", #selector(focusPane(_:)), "\(number)", [.command], tag: number)
-        }
         shellMenuItem.submenu = shellMenu
         mainMenu.addItem(shellMenuItem)
 
@@ -302,28 +327,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     // MARK: - Actions
 
-    @objc private func splitRight() { panes.splitActivePane(direction: .horizontal) }
-    @objc private func splitDown() { panes.splitActivePane(direction: .vertical) }
-    @objc private func splitLeft() { panes.splitActivePane(direction: .horizontal, before: true) }
-    @objc private func splitUp() { panes.splitActivePane(direction: .vertical, before: true) }
-    @objc private func closePane() { panes.closeActivePane() }
+    // Tabs
+    @objc private func newTab() { tabs.addTab(cwd: panes?.activeTerminal?.currentCwd) }
+    @objc private func closeTab() { tabs.closeSelectedTab() }
+    @objc private func nextTab() { tabs.selectNextTab() }
+    @objc private func previousTab() { tabs.selectPreviousTab() }
+    @objc private func selectTab(_ sender: NSMenuItem) { tabs.selectTab(at: sender.tag - 1) }
+
+    // Splits, within the frontmost tab
+    @objc private func splitRight() { panes?.splitActivePane(direction: .horizontal) }
+    @objc private func splitDown() { panes?.splitActivePane(direction: .vertical) }
+    @objc private func splitLeft() { panes?.splitActivePane(direction: .horizontal, before: true) }
+    @objc private func splitUp() { panes?.splitActivePane(direction: .vertical, before: true) }
+    @objc private func closePane() { panes?.closeActivePane() }
+    @objc private func focusPane(_ sender: NSMenuItem) { panes?.focusPane(number: sender.tag) }
 
     /// Image first, then text — the Cmd+V order the Electron build used.
     @objc private func pasteIntoTerminal() {
-        guard let terminal = panes.activeTerminal else { return }
+        guard let terminal = panes?.activeTerminal else { return }
         if terminal.pasteImageFromClipboard() { return }
         terminal.paste(self)
     }
-    @objc private func focusPane(_ sender: NSMenuItem) { panes.focusPane(number: sender.tag) }
 
     /// Cmd+L: what Ctrl+L does — let the shell redraw its own prompt.
     @objc private func clearScreen() {
-        panes.activeTerminal?.sendToShell("\u{0c}")
+        panes?.activeTerminal?.sendToShell("\u{0c}")
     }
 
     /// Cmd+K: also drop the scrollback, matching iTerm2 and the Electron build.
     @objc private func clearAll() {
-        guard let terminal = panes.activeTerminal else { return }
+        guard let terminal = panes?.activeTerminal else { return }
         terminal.terminal.clearScrollback()
         terminal.sendToShell("\u{0c}")
     }
@@ -348,9 +381,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func applyChangedSettings() {
         applyBufferSettings()
         applyWindowBackground()
-        panes.applyAppearanceToAll()
         let settings = SettingsStore.shared.settings
-        assistant.sidebar.applyTheme(TerminalThemes.theme(forKey: settings.theme))
+        let theme = TerminalThemes.theme(forKey: settings.theme)
+        tabs.applyTheme(theme)
+        assistant.sidebar.applyTheme(theme)
         if !settings.assistantEnabled {
             setSidebarVisible(false, byUser: true)
         }
@@ -367,11 +401,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func presentPalette(mode: AIPaletteController.Mode) {
-        let cwd = panes.activeTerminal?.currentCwd
+        let cwd = panes?.activeTerminal?.currentCwd
         let controller = AIPaletteController(mode: mode, cwd: cwd) { [weak self] command in
             // Never auto-executed: this only runs after the user hits Execute in
             // the review sheet. Same invariant as the Electron overlay.
-            self?.panes.activeTerminal?.sendToShell(command + "\n")
+            self?.panes?.activeTerminal?.sendToShell(command + "\n")
         }
         palette = controller
         controller.present(in: window)

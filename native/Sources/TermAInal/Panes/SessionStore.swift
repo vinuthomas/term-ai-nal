@@ -10,7 +10,7 @@ import AppKit
 /// class that the separate array invited.
 struct SessionSnapshot: Codable {
     struct Node: Codable {
-        var type: String
+        var type: String = "pane"
         /// `NSUserInterfaceLayoutOrientation.rawValue`, groups only.
         var direction: Int?
         var children: [Node]?
@@ -18,7 +18,32 @@ struct SessionSnapshot: Codable {
         var label: String?
     }
 
-    var layout: Node
+    /// One layout tree per tab.
+    var tabs: [Node] = []
+    var selected: Int = 0
+
+    init(tabs: [Node], selected: Int) {
+        self.tabs = tabs
+        self.selected = selected
+    }
+
+    /// Only for reading a session written before tabs existed; never encoded.
+    private enum LegacyKeys: String, CodingKey {
+        case layout
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let decoded = try c.decodeIfPresent([Node].self, forKey: .tabs), !decoded.isEmpty {
+            tabs = decoded
+            selected = try c.decodeIfPresent(Int.self, forKey: .selected) ?? 0
+            return
+        }
+        // A pre-tabs session held a single `layout`; it becomes one tab.
+        let legacy = try decoder.container(keyedBy: LegacyKeys.self)
+        tabs = [try legacy.decode(Node.self, forKey: .layout)]
+        selected = 0
+    }
 }
 
 enum SessionStore {

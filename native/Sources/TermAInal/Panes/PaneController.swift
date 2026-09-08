@@ -1,5 +1,36 @@
 import AppKit
 
+/// An `NSSplitView` that divides its children evenly the first time it is given
+/// a real size.
+///
+/// `addArrangedSubview` on its own leaves every child at whatever frame it
+/// already had. Because this app reuses terminal views across relayouts, those
+/// frames are stale — often zero — so a fresh split came out at arbitrary and
+/// sometimes invisible proportions. Divider positions can only be set once the
+/// split itself has a width, which is why this happens in `layout()` rather
+/// than at construction.
+final class EvenSplitView: NSSplitView {
+    private var hasDistributed = false
+
+    override func layout() {
+        super.layout()
+        let count = arrangedSubviews.count
+        guard !hasDistributed, count > 1 else { return }
+
+        let total = isVertical ? bounds.width : bounds.height
+        guard total > 1 else { return }
+        hasDistributed = true
+
+        let each = (total - dividerThickness * CGFloat(count - 1)) / CGFloat(count)
+        var position: CGFloat = 0
+        for index in 0..<(count - 1) {
+            position += each
+            setPosition(position, ofDividerAt: index)
+            position += dividerThickness
+        }
+    }
+}
+
 /// Owns the pane tree and rebuilds the `NSSplitView` hierarchy from it.
 ///
 /// Terminal views live in `terminals`, keyed by pane id, and are *re-parented*
@@ -19,13 +50,44 @@ final class PaneController {
     let containerView = NSView()
 
     var onActivePaneChange: ((String) -> Void)?
+    /// Fires when the active pane's shell reports a new title or directory, so
+    /// a tab label can follow what the pane is actually doing.
+    var onTitleChange: ((String) -> Void)?
+    /// Fires when the last pane in this controller has gone, so a tab holding
+    /// it can close itself.
+    var onEmpty: (() -> Void)?
+
+    /// Best available label: the shell's reported title, else the working
+    /// directory's last component.
+    var displayTitle: String {
+        guard let terminal = terminals[activePaneId] else { return "Shell" }
+        if let title = terminal.reportedTitle, !title.isEmpty { return title }
+        if let cwd = terminal.currentCwd {
+            let name = (cwd as NSString).lastPathComponent
+            return name.isEmpty ? "/" : name
+        }
+        return "Shell"
+    }
 
     /// Restores `snapshot` when one is supplied and usable, otherwise starts
     /// with a single pane. Restoring happens before the first `rebuild()` so a
     /// throwaway shell is never spawned only to be killed.
+    /// A fresh single-pane controller, optionally starting in `cwd`. Used when
+    /// a new tab is opened next to an existing one.
+    convenience init(startingIn cwd: String?) {
+        self.init(restoring: nil)
+        if let cwd {
+            root.allPanes.first?.cwd = cwd
+            // The pane was already built by init, so point the live shell at it
+            // rather than rebuilding: cd is cheaper than a second spawn.
+            terminals[activePaneId]?.sendToShell("cd \(cwd.replacingOccurrences(of: "\"", with: "\\\"")) && clear\n")
+        }
+    }
+
     init(restoring snapshot: SessionSnapshot? = nil) {
         if let snapshot,
-           let restored = PaneNode.from(snapshot.layout, newPaneId: Self.newPaneId),
+           let first = snapshot.tabs.first,
+           let restored = PaneNode.from(first, newPaneId: Self.newPaneId),
            let first = restored.allPaneIds.first {
             root = restored
             activePaneId = first
@@ -39,11 +101,31 @@ final class PaneController {
         rebuild()
     }
 
+    private func notifyTitleIfActive(_ paneId: String) {
+        guard paneId == activePaneId else { return }
+        onTitleChange?(displayTitle)
+    }
+
     /// Snapshot of the current layout, with each pane's live directory.
     func captureSession() -> SessionSnapshot {
-        SessionSnapshot(layout: root.snapshotNode { [weak self] paneId in
-            self?.terminals[paneId]?.currentCwd
-        })
+        SessionSnapshot(
+            tabs: [root.snapshotNode { [weak self] paneId in
+                self?.terminals[paneId]?.currentCwd
+            }],
+            selected: 0
+        )
+    }
+
+    /// Kills every shell in this controller. Called when its tab closes.
+    func terminateAll() {
+        for (paneId, terminal) in terminals {
+            terminal.terminate()
+            terminal.removeFromSuperview()
+            OutputBuffer.shared.cleanup(paneId: paneId)
+            CommandLog.shared.clear(paneId: paneId)
+        }
+        terminals.removeAll()
+        paneContainers.removeAll()
     }
 
     static func newPaneId() -> String {
@@ -87,8 +169,13 @@ final class PaneController {
     }
 
     func closeActivePane() {
-        // Refuse to close the last pane; the window would be left empty.
-        guard root.allPanes.count > 1, let current = root.findPane(paneId: activePaneId) else { return }
+        // The last pane closing means the tab is done; the tab owner decides
+        // whether that is allowed, since it knows how many tabs remain.
+        guard root.allPanes.count > 1 else {
+            onEmpty?()
+            return
+        }
+        guard let current = root.findPane(paneId: activePaneId) else { return }
 
         let remaining = root.allPaneIds.filter { $0 != activePaneId }
 
@@ -178,7 +265,7 @@ final class PaneController {
             return terminalView(for: node)
 
         case .group:
-            let split = NSSplitView()
+            let split = EvenSplitView()
             // A `.horizontal` group lays its children out left-to-right, which
             // AppKit expresses as a vertically-oriented divider.
             split.isVertical = (node.direction == .horizontal)
@@ -202,8 +289,12 @@ final class PaneController {
         }
 
         let terminal = TerminalPaneView(paneId: paneId, frame: .zero)
-        terminal.onCwdChange = { [weak node] directory in
+        terminal.onCwdChange = { [weak self, weak node] directory in
             node?.cwd = directory
+            self?.notifyTitleIfActive(paneId)
+        }
+        terminal.onTitleChange = { [weak self] _ in
+            self?.notifyTitleIfActive(paneId)
         }
         terminal.onOutput = { text in
             OutputBuffer.shared.append(paneId: paneId, text: text)

@@ -255,6 +255,55 @@ The lesson is the same one the environment and font regressions taught: a
 derived value needs a guaranteed floor, not a plausible-looking formula. Run
 this after touching `Palette` or adding a theme.
 
+## Tabs
+
+`TabController` owns the tab set; **each tab owns a whole `PaneController`**, so
+splitting still works inside a tab and none of the pane-tree behaviour had to be
+rebuilt. MCP exposes panes across *every* tab, not just the visible one — a
+shell in a background tab is still live and an agent may be driving it.
+
+The slide comes out of the layout rather than a bespoke transition: the content
+area is one horizontal strip holding every tab's view side by side, each exactly
+one viewport wide, and selecting a tab animates the strip's offset by a multiple
+of that width. The outgoing tab therefore travels left or right according to
+where the incoming one sits in the order, with no direction logic anywhere.
+Because the offset is a function of viewport width it is recomputed on resize
+rather than stored.
+
+### The split bug
+
+Splits genuinely were broken, and not subtly: `buildView` called
+`addArrangedSubview` and **never set a divider position**. `NSSplitView` then
+lays children out at whatever frame they already had — and because this app
+reuses terminal views across relayouts, those frames were stale, often zero. So
+a fresh split came out at arbitrary and sometimes invisible proportions.
+
+`EvenSplitView` distributes evenly the first time it is given a real size.
+Positions can only be set once the split itself has a width, hence `layout()`
+rather than construction. Measured after the fix: child widths `[599, 599]`,
+spread 0.
+
+### Shortcuts changed
+
+Tabs took the conventional bindings, which means the Electron build's
+non-standard ones moved:
+
+| | before | now |
+|---|---|---|
+| New tab | — | `Cmd+T` |
+| Close tab | — | `Cmd+Shift+W` |
+| Next / previous tab | — | `Cmd+Shift+]` / `Cmd+Shift+[` |
+| Select tab 1-9 | — | `Cmd+1`…`Cmd+9` |
+| Split right / down | `Cmd+T` / `Cmd+Shift+T` | `Cmd+D` / `Cmd+Shift+D` |
+| Split left / up | `Cmd+Alt+T` / `Cmd+Shift+Alt+T` | `Cmd+Alt+D` / `Cmd+Shift+Alt+D` |
+| Focus pane 1-9 | `Cmd+1`…`Cmd+9` | `Cmd+Alt+1`…`Cmd+Alt+9` |
+
+`Cmd+W` still closes the active pane, and now closes the tab when it is the last
+pane in it.
+
+A session written before tabs held a single `layout` key; it decodes as one tab
+containing that layout, verified against a real pre-tabs file.
+
 ## Verifying pane reuse
 
 The most fragile invariant in the app is that a relayout re-parents terminals

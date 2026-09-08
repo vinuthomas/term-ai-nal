@@ -26,7 +26,11 @@ final class TerminalPaneView: LocalProcessTerminalView {
     /// A separate relay object receives them and forwards here.
     private let callbackRelay = PaneProcessRelay()
 
+    /// Last title the shell set via OSC 0/2.
+    private(set) var reportedTitle: String?
+
     var onOutput: ((String) -> Void)?
+    var onTitleChange: ((String) -> Void)?
     var onCwdChange: ((String) -> Void)?
     var onProcessExit: ((Int32?) -> Void)?
 
@@ -128,6 +132,11 @@ final class TerminalPaneView: LocalProcessTerminalView {
         process.send(data: bytes[...])
     }
 
+    func updateReportedTitle(_ title: String) {
+        reportedTitle = title
+        onTitleChange?(title)
+    }
+
     func updateReportedCwd(_ directory: String) {
         // OSC 7 carries a file:// URL including the hostname — macOS's
         // /etc/zshrc `update_terminal_cwd` emits e.g.
@@ -204,7 +213,9 @@ private final class PaneProcessRelay: NSObject, LocalProcessTerminalViewDelegate
     }
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        source.window?.title = title.isEmpty ? "term-ai-nal" : title
+        // Goes to the tab label rather than the window title: with tabs the
+        // window name is no longer a single shell's business.
+        owner?.updateReportedTitle(title)
     }
 
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {
