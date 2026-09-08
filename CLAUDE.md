@@ -69,7 +69,8 @@ exists because a specific bug shipped:
 | `--check-contrast` | WCAG ratios for the assistant sidebar's derived colours across every built-in theme, against floors: body and dim text 4.5:1, accent 3:1, and a 0.029 luminance step between a card and the sidebar behind it. Exits non-zero on a violation. Run after touching `AssistantSidebarView.Palette` or adding a theme. |
 | `--check-titlebar` | That the titlebar accessory gets a real width. It builds a window and calls the shipped `AppDelegate.makeSidebarToggleAccessory` factory, not a copy. Asserts the invariant (non-zero width, container wide enough) rather than a magic number, because the bug was a *zero* width. |
 | `--check-locale` | How the on-device model sees the app's locale: `Locale.current`, preferred languages, the bundle's localizations, and `supportsLocale`. Exists because `Locale.current` is the user's languages *intersected with the app's own localizations*, so a bundle declaring none can resolve differently from a bare CLI binary on the same machine — a model call that fails only inside the app. |
-| `--check-ctrld` | The Ctrl+D teardown chain at all three levels: a split pane closes itself and the tab stays; a non-last tab closes; the last tab ends the session. Teardown runs pane → tab → window, and a break anywhere leaves dead UI rather than an error. |
+| `--check-ctrld` | The Ctrl+D teardown chain at all three levels: a pane closes itself and the tab stays; a non-last tab closes; the last tab ends the session. Teardown runs pane → tab → window, and a break anywhere leaves dead UI rather than an error. |
+| `--check-accordion` | The pane accordion: expanding a pane must not recreate its terminal (that kills the shell, and `rebuild()` now runs on *every* expand), only the expanded pane is mounted, headers stack without overlapping, and a session round-trips — including flattening the older nested-split format. Run after touching `PaneController`. |
 
 Two things that have wasted time:
 
@@ -85,20 +86,28 @@ Two things that have wasted time:
 takes reading several files to see:
 
 **`TabController` → `PaneController` → `TerminalPaneView`.** A tab owns a *whole*
-`PaneController`, not a single terminal, which is why splitting works inside a tab and none
-of the pane-tree behaviour had to be rebuilt for tabs. The tab slide is not a transition: the
+`PaneController`, not a single terminal, which is why panes work inside a tab and none of
+that behaviour had to be rebuilt for tabs. The tab slide is not a transition: the
 content area is one horizontal strip holding every tab's view side by side, each a viewport
 wide, and selecting a tab animates the strip's offset by a multiple of that width — so the
 outgoing tab travels the correct direction with no direction logic anywhere. The offset is a
 function of viewport width, hence recomputed on resize rather than stored.
 
-**`PaneController` owns a `PaneNode` tree and re-parents terminal views.** `PaneNode` is
-`group` (direction + children) or `pane` (leaf). Terminals live in the `terminals` registry
-keyed by pane id and are moved into freshly built `NSSplitView`s, never recreated —
-**recreating them kills the running shells.** Because views are reused, their frames are
-stale (often zero) at relayout, and `NSSplitView` lays children out at whatever frame they
-already had; `EvenSplitView` therefore distributes positions in `layout()`, once the split
-has a real width, not at construction.
+**`PaneController` owns a flat pane list and re-parents terminal views.** Panes are an
+ordered `[TerminalPaneModel]` laid out as a vertical accordion: one expanded showing its
+terminal, the rest collapsed to an `AccordionHeader`. Terminals live in the `terminals`
+registry keyed by pane id and are re-parented on rebuild, never recreated — **recreating
+them kills the running shells**, and `rebuild()` now runs on *every* expand, so that
+invariant is exercised far more than it was under splits. `--check-accordion` asserts it.
+
+Rows are positioned by frame rather than Auto Layout, because the heights are one
+expression (each collapsed pane contributes a header, the expanded one takes the rest) and
+the views are reparented constantly. The cost is that resize must be observed:
+`AccordionContainerView.layout()` calls back into `layoutAccordion()`.
+
+This replaced a recursive tree of split groups with four directions, plus an `EvenSplitView`
+that existed because `NSSplitView` lays reused children out at their stale frames. Both are
+gone; `electron-final` and git history have them if the reasoning is ever needed.
 
 **`TerminalPaneView` subclasses `LocalProcessTerminalView` and taps the PTY stream for two
 consumers.** `OutputBuffer` (`MCP/`) gets flat ANSI-stripped text in a per-pane ring buffer,
@@ -155,8 +164,8 @@ hides itself at one tab, which is most of the time.
 - `App/` — `main.swift` (the `--check-*` flags plus the hand-rolled `NSApplication`
   lifecycle, since SPM has no `@NSApplicationMain`), `AppDelegate` (window, menu with all key
   equivalents, MCP wiring, titlebar accessory), `AIPaletteController` (the review sheet).
-- `Panes/` — `PaneNode`, `PaneController`/`EvenSplitView`, `TerminalPaneView`, `ProcessCwd`,
-  `SessionStore`, `NewPaneDirectory`.
+- `Panes/` — `TerminalPaneModel`, `PaneController`/`AccordionContainerView`,
+  `AccordionHeader`, `TerminalPaneView`, `ProcessCwd`, `SessionStore`, `NewPaneDirectory`.
 - `Tabs/` — `TabController`, `TabBarView`.
 - `Terminal/` — `CommandLog`.
 - `Assistant/` — `AssistantController`, `AssistantSidebarView` (and its `Palette`, the thing
@@ -216,7 +225,7 @@ Each of these was learned by shipping the opposite.
   need accessibility permission the app does not have). `docs/MIGRATION.md` has the throwaway
   `--self-test-panes` harness: split, then assert object identity of the terminal view plus
   `process.running`. That is the whole test; re-add it, run it, remove it.
-- **One preference covers both tabs and splits** (`newPaneDirectory`: `inherit` / `home` /
+- **One preference covers both tabs and panes** (`newPaneDirectory`: `inherit` / `home` /
   `custom`). Each is "another shell opened from here", and having them disagree about the
   starting directory would be arbitrary. A custom path that no longer resolves falls back to
   inheriting rather than dumping the user at `/`. The directory is set on the node before
@@ -252,17 +261,19 @@ Each of these was learned by shipping the opposite.
 
 ## Shortcuts
 
-`Cmd+T` new tab · `Cmd+Shift+W` close tab · `Cmd+Shift+]`/`[` next/previous tab · `Cmd+1`–`9`
-select tab · `Cmd+D`/`Cmd+Shift+D` split right/down · `Cmd+Alt+D`/`Cmd+Shift+Alt+D` split
-left/up · `Cmd+W` close pane (closes the tab when it is the last pane) · `Cmd+Alt+1`–`9`
-focus pane · `Cmd+K` clear screen and scrollback · `Cmd+L` clear screen · `Cmd+Shift+P`
-command palette · `Cmd+Shift+A` toggle assistant sidebar · `Cmd+C`/`Cmd+V`/`Cmd+A` copy /
-paste / select all.
+`Cmd+T` new tab · `Cmd+Shift+W` close tab · `Cmd+Shift+]`/`[` next/previous tab ·
+`Cmd+1`–`9` select tab · `Cmd+D` new pane · `Cmd+Alt+1`–`9` expand pane · `Cmd+W` close pane
+(closes the tab when it is the last pane) · `Cmd+K` clear screen and scrollback · `Cmd+L`
+clear screen · `Cmd+Shift+P` command palette · `Cmd+Shift+A` toggle assistant sidebar ·
+`Cmd+,` settings · `Cmd+C`/`Cmd+V`/`Cmd+A` copy / paste / select all.
 
-All of these are `NSMenuItem` key equivalents built in `AppDelegate.buildMenu`, not a global
-key handler. Tabs took the conventional bindings, which is why the Electron build's
-non-standard `Cmd+T` (split) and `Cmd+1`–`9` (panes) moved. Copy and Select All use the
-standard responder-chain selectors that SwiftTerm's `TerminalView` already implements.
+These are `NSMenuItem` key equivalents, which is why they do not fire while a text field has
+focus. They differ from the Electron build: tabs took the conventional bindings (`Cmd+T`,
+`Cmd+1`–`9`), so panes moved to `Cmd+D` and pane focus to `Cmd+Alt+1`–`9`. The four split
+directions are gone with the split tree — there is one axis now.
+
+Copy and Select All use the standard responder-chain selectors that SwiftTerm's
+`TerminalView` already implements, which is why they need no custom handling.
 
 ## Known gaps
 

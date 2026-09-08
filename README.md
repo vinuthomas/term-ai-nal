@@ -58,7 +58,8 @@ coverage in the repo.
 | `--check-contrast` | WCAG contrast of the assistant sidebar's derived colours across all built-in themes, against fixed floors. |
 | `--check-titlebar` | The titlebar accessory (the assistant toggle) gets a non-zero width rather than rendering invisibly. |
 | `--check-locale` | Apple Intelligence locale support — `Locale.current`, bundle localizations, `supportsLocale`, and a live request. |
-| `--check-ctrld` | Ctrl+D teardown at all three levels: split pane → tab → window. |
+| `--check-ctrld` | Ctrl+D teardown at all three levels: pane → tab → window. |
+| `--check-accordion` | That expanding a pane does not recreate its terminal (which would kill the shell), that only the expanded pane is mounted, and that sessions round-trip including the older nested-split format. |
 | `--check-cloud` | The Anthropic and Gemini request shape — auth header, schema placement, response decoding — against `Scripts/mock-ai-api.py`, which must be running. |
 
 Run them against the built binary, e.g.
@@ -76,13 +77,18 @@ against its real API (no keys have been used), and image paste rendering.
 
 ## Features
 
-- **Tabs.** Each tab owns a full pane tree, so splits work inside a tab. Tab
-  switching slides: the content area is one horizontal strip of viewport-wide
-  tab views and selection animates its offset, so the direction of travel falls
-  out of the tab order.
-- **Splits** within a tab, in any of four directions, distributed evenly.
-  Terminals are re-parented across relayouts rather than recreated, so a split
-  never kills a running shell.
+- **Tabs.** Each tab owns its own panes. Tab switching slides: the content area
+  is one horizontal strip of viewport-wide tab views and selection animates its
+  offset, so the direction of travel falls out of the tab order.
+- **Panes as an accordion.** Within a tab, panes stack as full-width rows: one
+  expanded showing its terminal, the rest collapsed to a clickable header with
+  its title and shortcut. `Cmd+D` adds a row. A single pane shows no header at
+  all, since a row of chrome describing the only thing on screen is noise.
+  Terminals are re-parented when the stack is rebuilt rather than recreated, so
+  switching panes never kills a running shell.
+
+  This replaced a recursive tree of split groups with four split directions.
+  Panes in one axis with one expanded left nothing for the tree to describe.
 - **Assistant sidebar** (`Cmd+Shift+A`, or the toggle at the right of the
   titlebar — the sidebar can be closed and reopened from the same control).
   Parses OSC 133 semantic prompt marks
@@ -99,7 +105,7 @@ against its real API (no keys have been used), and image paste rendering.
 - **Session restore** (`restoreSession`, off by default). Persists the tab and
   pane layout with each pane's directory inline.
 - **New-shell directory.** `newPaneDirectory` is `inherit` (default), `home` or
-  `custom`; it covers both new tabs and new splits, set at spawn time rather
+  `custom`; it covers both new tabs and new panes, set at spawn time rather
   than by sending a `cd`.
 - **MCP server**, on by default — see below.
 
@@ -170,7 +176,7 @@ They are never written to `settings.json`. Settings live in
 
 Read from the menu definitions in `Sources/TermAInal/App/AppDelegate.swift`,
 which are the authoritative source. These differ from the Electron build's:
-tabs took the conventional bindings, so splits moved to `Cmd+D` and pane focus
+tabs took the conventional bindings, so panes moved to `Cmd+D` and pane focus
 gained `Alt`.
 
 | Shortcut | Action |
@@ -181,10 +187,7 @@ gained `Alt`.
 | `Cmd+Shift+W` | Close tab |
 | `Cmd+Shift+]` / `Cmd+Shift+[` | Next / previous tab |
 | `Cmd+1`–`Cmd+9` | Select tab 1–9 |
-| `Cmd+D` | Split right |
-| `Cmd+Shift+D` | Split down |
-| `Cmd+Alt+D` | Split left |
-| `Cmd+Shift+Alt+D` | Split up |
+| `Cmd+D` | New pane (adds an accordion row) |
 | `Cmd+W` | Close pane (closes the tab when it is the last pane) |
 | `Cmd+Alt+1`–`Cmd+Alt+9` | Focus pane 1–9 |
 | `Cmd+K` | Clear screen and scrollback |
@@ -193,7 +196,7 @@ gained `Alt`.
 | `Cmd+Shift+A` | Toggle assistant sidebar |
 | `Cmd+H` / `Cmd+Q` | Hide / quit |
 
-Ctrl+D exits the shell and closes whatever it leaves empty: a split pane, then
+Ctrl+D exits the shell and closes whatever it leaves empty: a pane, then
 its tab, then the window (which quits the app).
 
 ## MCP server
@@ -227,6 +230,25 @@ Two things to know before relying on it. There is **no policy or audit layer**:
 the server executes anything a local client asks for, which is why it is worth
 turning off if you do not need it. And changing the port in Settings does not
 yet restart the server — `MCPServer` is immutable per port.
+
+### `open_terminal`
+
+Agents can open terminals. One tool with a defaulted `scope`, because the policy
+is "prefer a pane" and two tools would give the less-preferred one equal
+billing:
+
+| argument | |
+|---|---|
+| `purpose` | **required** — what the terminal is for; becomes its label |
+| `scope` | `pane` (default) or `tab` |
+| `cwd` | optional; an unusable path falls back to the app's preference |
+| `focus` | default `false`, so the user's view is not moved |
+
+A pane groups shells belonging to one piece of work; a tab is for separate work.
+Note that with the accordion only the expanded pane is visible, so a pane groups
+rather than showing two at once — a terminal opened without `focus` runs, but is
+collapsed until someone expands it. Capped at 24 terminals, since each is a live
+shell. Gated by `mcpFeatures.openTerminal`.
 
 ## Bundled font
 

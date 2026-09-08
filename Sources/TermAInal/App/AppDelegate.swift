@@ -25,6 +25,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     /// narrow to show it", so widening the window does not resurrect a sidebar
     /// the user deliberately closed.
     private var userCollapsedSidebar = false
+    /// Ceiling on terminals an agent can open. Each is a live shell.
+    private static let maxAgentTerminals = 24
+
     /// Below this the sidebar would leave too little room for the terminal.
     private static let sidebarMinimumWindowWidth: CGFloat = 900
 
@@ -274,13 +277,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             var infos: [MCPPaneInfo] = []
             var number = 1
             for tab in self.tabs.tabs {
-                for node in tab.panes.root.allPanes {
-                    guard let paneId = node.paneId else { continue }
+                for pane in tab.panes.panes {
                     infos.append(MCPPaneInfo(
-                        paneId: paneId,
+                        paneId: pane.paneId,
                         paneNumber: number,
-                        label: node.label ?? tab.title,
-                        cwd: tab.panes.terminals[paneId]?.currentCwd ?? node.cwd
+                        label: pane.label ?? tab.title,
+                        cwd: tab.panes.terminals[pane.paneId]?.currentCwd ?? pane.cwd
                     ))
                     number += 1
                 }
@@ -291,6 +293,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         server.readBuffer = { paneId, maxLines in
             OutputBuffer.shared.read(paneId: paneId, maxLines: maxLines)
         }
+        // The app owns the policy: how many terminals are too many, whether a
+        // path is usable, and whether the user's view moves. The server only
+        // parses the request and relays this sentence back.
+        server.openTerminal = { [weak self] scope, purpose, cwd, focus in
+            guard let self else { return "Error: The window is not available." }
+
+            // First tool that changes the window's structure rather than
+            // reading it or typing into it, so it needs a ceiling: a looping
+            // agent would otherwise spawn shells until the machine complained.
+            let paneCount = self.tabs.tabs.reduce(0) { $0 + $1.panes.paneIds.count }
+            guard paneCount < Self.maxAgentTerminals else {
+                return "Error: \(Self.maxAgentTerminals) terminals are already open. Close some before opening more."
+            }
+
+            // A path that does not resolve falls back to the app's preference
+            // rather than failing the call or dumping the shell at /.
+            var directory: String?
+            if let cwd {
+                let expanded = (cwd as NSString).expandingTildeInPath
+                var isDirectory: ObjCBool = false
+                if FileManager.default.fileExists(atPath: expanded, isDirectory: &isDirectory),
+                   isDirectory.boolValue {
+                    directory = expanded
+                }
+            }
+            let ignoredPath = cwd != nil && directory == nil
+
+            var result = ""
+            let work = {
+                let label = String(purpose.prefix(60))
+                if scope == "tab" {
+                    let paneId = self.tabs.addLabelledTab(purpose: label, cwd: directory, focus: focus)
+                    result = "Opened tab \"\(label)\" with terminal '\(paneId)'."
+                } else if let panes = self.tabs.activePanes {
+                    let paneId = panes.addPane(purpose: label, cwd: directory, focus: focus)
+                    result = "Opened pane \"\(label)\" as terminal '\(paneId)' in the current tab."
+                } else {
+                    result = "Error: No tab to add a pane to."
+                }
+            }
+            // Requests arrive on the server's queue; view work is main-only.
+            if Thread.isMainThread { work() } else { DispatchQueue.main.sync(execute: work) }
+
+            if result.hasPrefix("Error") { return result }
+            if ignoredPath { result += " The requested directory did not exist, so the default was used." }
+            if !focus { result += " It is not visible; pass focus=true or let the user expand it." }
+            return result + " Send input with send_input_to_terminal."
+        }
+
         server.sendInput = { [weak self] paneId, text in
             guard let self,
                   let terminal = self.tabs.tabs.compactMap({ $0.panes.terminals[paneId] }).first
@@ -349,10 +400,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             addItem(to: shellMenu, "Tab \(number)", #selector(selectTab(_:)), "\(number)", [.command], tag: number)
         }
         shellMenu.addItem(.separator())
-        addItem(to: shellMenu, "Split Right", #selector(splitRight), "d", [.command])
-        addItem(to: shellMenu, "Split Down", #selector(splitDown), "d", [.command, .shift])
-        addItem(to: shellMenu, "Split Left", #selector(splitLeft), "d", [.command, .option])
-        addItem(to: shellMenu, "Split Up", #selector(splitUp), "d", [.command, .shift, .option])
+        addItem(to: shellMenu, "New Pane", #selector(addPane), "d", [.command])
         addItem(to: shellMenu, "Close Pane", #selector(closePane), "w", [.command])
         for number in 1...9 {
             addItem(to: shellMenu, "Focus Pane \(number)", #selector(focusPane(_:)), "\(number)", [.command, .option], tag: number)
@@ -401,11 +449,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func previousTab() { tabs.selectPreviousTab() }
     @objc private func selectTab(_ sender: NSMenuItem) { tabs.selectTab(at: sender.tag - 1) }
 
-    // Splits, within the frontmost tab
-    @objc private func splitRight() { panes?.splitActivePane(direction: .horizontal) }
-    @objc private func splitDown() { panes?.splitActivePane(direction: .vertical) }
-    @objc private func splitLeft() { panes?.splitActivePane(direction: .horizontal, before: true) }
-    @objc private func splitUp() { panes?.splitActivePane(direction: .vertical, before: true) }
+    // Panes, within the frontmost tab
+    @objc private func addPane() { panes?.addPane() }
     @objc private func closePane() { panes?.closeActivePane() }
     @objc private func focusPane(_ sender: NSMenuItem) { panes?.focusPane(number: sender.tag) }
 

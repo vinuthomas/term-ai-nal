@@ -313,6 +313,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let featureGetOutput = NSButton()
     private let featureGetActiveOutput = NSButton()
     private let featureSendInput = NSButton()
+    private let featureOpenTerminal = NSButton()
     private let mcpUrlLabel = NSTextField(labelWithString: "")
 
     /// Sentinel for "no explicit family", kept distinct from an empty combo
@@ -574,6 +575,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             (featureGetOutput, "get_terminal_output"),
             (featureGetActiveOutput, "get_active_terminal_output"),
             (featureSendInput, "send_input_to_terminal"),
+            (featureOpenTerminal, "open_terminal"),
         ] {
             button.setButtonType(.switch)
             button.title = title
@@ -581,6 +583,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
         let features = NSStackView(views: [
             featureListTerminals, featureGetOutput, featureGetActiveOutput, featureSendInput,
+            featureOpenTerminal,
         ])
         features.orientation = .vertical
         features.alignment = .leading
@@ -640,6 +643,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         featureGetOutput.state = draft.mcpFeatures.getTerminalOutput ? .on : .off
         featureGetActiveOutput.state = draft.mcpFeatures.getActiveTerminalOutput ? .on : .off
         featureSendInput.state = draft.mcpFeatures.sendInputToTerminal ? .on : .off
+        featureOpenTerminal.state = draft.mcpFeatures.openTerminal ? .on : .off
 
         assistantEnabledCheckbox.state = draft.assistantEnabled ? .on : .off
         assistantInsightsPopup.selectItem(at: Self.insightModes.firstIndex(of: draft.assistantInsights) ?? 1)
@@ -688,7 +692,8 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             listTerminals: featureListTerminals.state == .on,
             getTerminalOutput: featureGetOutput.state == .on,
             getActiveTerminalOutput: featureGetActiveOutput.state == .on,
-            sendInputToTerminal: featureSendInput.state == .on
+            sendInputToTerminal: featureSendInput.state == .on,
+            openTerminal: featureOpenTerminal.state == .on
         )
     }
 

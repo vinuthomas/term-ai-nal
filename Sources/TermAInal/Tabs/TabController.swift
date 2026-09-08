@@ -62,7 +62,7 @@ final class TabController: NSObject, TabBarViewDelegate {
     /// tab is still a live shell an agent may be driving.
     var allPanes: [(paneId: String, controller: PaneController)] {
         tabs.flatMap { tab in
-            tab.panes.root.allPaneIds.map { ($0, tab.panes) }
+            tab.panes.paneIds.map { ($0, tab.panes) }
         }
     }
 
@@ -170,7 +170,7 @@ final class TabController: NSObject, TabBarViewDelegate {
     // MARK: - Tabs
 
     @discardableResult
-    func addTab(restoring snapshot: SessionSnapshot.Node? = nil, cwd: String? = nil) -> TerminalTab {
+    func addTab(restoring snapshot: SessionSnapshot.Tab? = nil, cwd: String? = nil) -> TerminalTab {
         let controller: PaneController
         if let snapshot {
             controller = PaneController(restoring: SessionSnapshot(tabs: [snapshot], selected: 0))
@@ -203,6 +203,20 @@ final class TabController: NSObject, TabBarViewDelegate {
             guard let self, let tab, let index = self.tabs.firstIndex(where: { $0 === tab }) else { return }
             self.closeTab(at: index)
         }
+    }
+
+    /// Opens a tab for an external caller, returning its pane id.
+    @discardableResult
+    func addLabelledTab(purpose: String, cwd: String?, focus: Bool) -> String {
+        let previous = selectedIndex
+        let tab = addTab(cwd: NewPaneDirectory.resolve(inheriting: cwd ?? activePanes?.activeTerminal?.currentCwd))
+        tab.title = purpose
+        tab.panes.panes.first?.label = purpose
+        tabBar.setTabs(tabs.map(\.title), selected: selectedIndex)
+        if !focus, tabs.indices.contains(previous) {
+            selectTab(at: previous)
+        }
+        return tab.panes.activePaneId
     }
 
     func selectTab(at index: Int) {
@@ -274,7 +288,9 @@ final class TabController: NSObject, TabBarViewDelegate {
 
     func captureSession() -> SessionSnapshot {
         SessionSnapshot(
-            tabs: tabs.map { $0.panes.captureSession().tabs.first ?? SessionSnapshot.Node(type: "pane") },
+            tabs: tabs.map {
+                $0.panes.captureSession().tabs.first ?? SessionSnapshot.Tab(panes: [], expanded: 0)
+            },
             selected: selectedIndex
         )
     }

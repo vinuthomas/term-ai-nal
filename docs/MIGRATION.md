@@ -317,6 +317,48 @@ Two provider-specific traps:
   no text at all when `finishReason` is `SAFETY` or `MAX_TOKENS`; that is
   Gemini's refusal shape and produces a clear error rather than an empty string.
 
+### `open_terminal`, and why it is one tool
+
+MCP can open terminals. It is deliberately **one** tool with a defaulted
+`scope`, not an `open_pane` and an `open_tab`: two tools are picked by name
+recognition, and the one an agent should reach for less often would get equal
+billing. One tool makes `scope: "pane"` the path of least resistance and puts
+the whole policy in a single description.
+
+The policy cannot be enforced — only the caller knows whether two shells belong
+to the same piece of work — so it is expressed where the model reads it, and the
+default carries the rest. `purpose` is required for the same reason: an agent
+that has to name what a terminal is for makes a better pane-versus-tab choice
+than one that does not, and the answer becomes the label, which finally fills
+the `PaneNode.label` gap that had been plumbed through to MCP with nothing
+setting it.
+
+The accordion changes the argument for panes. Under splits, "same task" meant
+"visible side by side"; with an accordion only the expanded pane is visible, so
+a pane **groups** shells rather than showing two at once. The description says
+so, because an agent reasoning from a split-pane prior would otherwise put
+output somewhere the user cannot see.
+
+Three decisions the server does not make, because `MCPServer` never reads UI
+state and takes its policy injected:
+
+- **`focus` defaults to false.** An agent opening a terminal should not yank the
+  user's view. The reply says the terminal is not visible, so the agent can
+  mention it rather than assume it was seen.
+- **A ceiling of 24 terminals.** This is the first tool that changes the
+  window's structure rather than reading it or typing into it; a looping agent
+  would otherwise spawn shells until the machine complained. Verified by
+  lowering the cap and watching four consecutive refusals.
+- **An unusable `cwd` falls back** to the app's new-terminal preference and says
+  so, rather than failing the call or dumping the shell at `/`.
+
+A collapsed pane is a live shell — verified by sending a command to one opened
+without focus and reading its output back.
+
+Gated by `mcpFeatures.openTerminal`, default on, consistent with
+`sendInputToTerminal`, which is the more dangerous capability of the two since
+it runs commands in a shell the user is already using.
+
 ### Verifying providers nobody has keys for
 
 `Scripts/mock-ai-api.py` plus `--check-cloud` is the only coverage these have. A
@@ -390,7 +432,49 @@ where the incoming one sits in the order, with no direction logic anywhere.
 Because the offset is a function of viewport width it is recomputed on resize
 rather than stored.
 
-### The split bug
+### Splits became an accordion
+
+Panes inside a tab are now a flat, ordered list laid out as a vertical
+accordion: one expanded showing its terminal, the rest collapsed to a header
+row with title and shortcut. `Cmd+D` adds a row; a single pane shows no header,
+since one row of chrome describing the only thing on screen is noise.
+
+That removed the recursive `PaneNode` tree, its four split directions, and
+`EvenSplitView` — roughly 120 lines of tree manipulation. The tree existed to
+describe arbitrary nested splits; with panes in one axis and one expanded, there
+was nothing left for it to describe.
+
+Two consequences worth knowing:
+
+- **The re-parenting invariant is now load-bearing far more often.**
+  `rebuild()` runs on every *expand*, not just on adding or closing a pane, so
+  a regression that recreates terminal views would kill running shells on an
+  ordinary pane switch. `--check-accordion` asserts object identity and
+  `process.running` across an expand.
+- **The terminal inset went missing.** SwiftTerm draws glyphs flush to its own
+  bounds, so a pane needs padding or the first column touches the window edge.
+  The split layout achieved that with a padded wrapper view per pane; laying
+  rows out by frame turns it into an inset, and the rewrite simply dropped it.
+  That is the second time this exact padding has been absent, so
+  `--check-accordion` now asserts the expanded terminal is inset from both
+  container edges rather than leaving it to the eye.
+- **Edge-to-edge rows read as chrome, not content.** The first version spanned
+  the full width with square corners, which made an expanded header
+  indistinguishable from the tab bar directly above it and a collapsed one look
+  like a status bar. Rows are now inset horizontally by the same amount as the
+  terminal, separated by a gap, rounded and outlined — so the stack reads as
+  panels sitting *in* the content area. The expanded row takes the accent colour
+  for its outline as well as its leading stripe, and the stripe is inset inside
+  the corner radius so the clip does not eat its ends.
+- **Layout is frame-based, so resize has to be observed.** The heights are one
+  expression and the views are reparented constantly, which Auto Layout handles
+  poorly; `AccordionContainerView.layout()` calls back into `layoutAccordion()`.
+
+Sessions written with nested splits still restore: `LegacyNode` decodes the old
+tree and flattens it depth-first, which is the order the panes appeared on
+screen. Verified against a hand-written two-level tree.
+
+### The split bug (historical)
 
 Splits genuinely were broken, and not subtly: `buildView` called
 `addArrangedSubview` and **never set a divider position**. `NSSplitView` then

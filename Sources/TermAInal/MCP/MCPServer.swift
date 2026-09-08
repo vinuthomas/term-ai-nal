@@ -39,6 +39,13 @@ final class MCPServer {
     var readBuffer: ((String, Int?) -> String)?
     var sendInput: ((String, String) -> Bool)?
 
+    /// Opens a new terminal. `scope` is `pane` or `tab`.
+    ///
+    /// The app decides the policy — how many are too many, whether the path is
+    /// usable, whether focus moves — and returns the sentence the client sees.
+    /// The server stays out of it, as with every other capability here.
+    var openTerminal: ((_ scope: String, _ purpose: String, _ cwd: String?, _ focus: Bool) -> String)?
+
     // MARK: - Configuration
 
     private let port: Int
@@ -348,6 +355,30 @@ final class MCPServer {
             }
             return "Sent \(string.count) characters to terminal '\(id)'."
 
+        case "open_terminal":
+            guard let purpose = (args["purpose"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !purpose.isEmpty else {
+                return "Error: Missing required argument 'purpose'."
+            }
+            let scope = (args["scope"] as? String) ?? "pane"
+            guard scope == "pane" || scope == "tab" else {
+                return "Error: Argument 'scope' must be \"pane\" or \"tab\"."
+            }
+            let cwd = (args["cwd"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            // JSONSerialization gives NSNumber for JSON booleans, and `as Bool`
+            // matches any NSNumber through ObjC bridging — the same trap that
+            // once turned the JSON-RPC id 1 into true.
+            let focus: Bool
+            if let number = args["focus"] as? NSNumber, CFGetTypeID(number as CFTypeRef) == CFBooleanGetTypeID() {
+                focus = number.boolValue
+            } else {
+                focus = false
+            }
+            guard let open = openTerminal else {
+                return "Error: Opening terminals is not available."
+            }
+            return open(scope, purpose, cwd, focus)
+
         case "watch_terminal":
             let id = (args["terminal_id"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? activeId
             guard let id else { return "Error: No terminal_id provided and no active terminal." }
@@ -614,6 +645,33 @@ private struct MCPTool {
             featureKey: .listTerminals
         ),
         MCPTool(
+            name: "open_terminal",
+            description: """
+                Open another terminal to drive. Prefer scope="pane".
+
+                A pane is a row in the current tab's accordion, for shells belonging to the                 same piece of work — a build, its test run, its logs. A tab is for genuinely                 separate work the user would switch to rather than group: another repository,                 an unrelated task. When in doubt, open a pane: it keeps related shells                 together and is easy to promote later, whereas a stray tab is clutter the                 user has to close.
+
+                Note that only the expanded pane in a tab is visible. A pane groups shells;                 it does not put two of them on screen at once. If the user needs to watch                 this terminal, pass focus=true — otherwise it opens without disturbing them.
+
+                'purpose' is required and becomes the terminal's label, shown on the pane                 header and in list_terminals. Say what the terminal is for, not what you are                 about to type.
+                """,
+            properties: .object([
+                "purpose": stringProp("What this terminal is for, e.g. \"integration test logs\". Becomes its label."),
+                "scope": .object([
+                    "type": .string("string"),
+                    "enum": .array([.string("pane"), .string("tab")]),
+                    "description": .string("\"pane\" (default) adds a row to the current tab; \"tab\" starts a separate one."),
+                ]),
+                "cwd": stringProp("Directory to start in. Defaults to the app's new-terminal preference."),
+                "focus": .object([
+                    "type": .string("boolean"),
+                    "description": .string("Show it immediately. Defaults to false so the user is not interrupted."),
+                ]),
+            ]),
+            required: ["purpose"],
+            featureKey: .openTerminal
+        ),
+        MCPTool(
             name: "get_terminal_output",
             description: "Get the buffered text output of a specific terminal panel.",
             properties: .object([
@@ -669,6 +727,7 @@ private enum MCPFeatureKey {
     case getTerminalOutput
     case getActiveTerminalOutput
     case sendInputToTerminal
+    case openTerminal
 }
 
 private extension MCPFeatures {
@@ -678,6 +737,7 @@ private extension MCPFeatures {
         case .getTerminalOutput: return getTerminalOutput
         case .getActiveTerminalOutput: return getActiveTerminalOutput
         case .sendInputToTerminal: return sendInputToTerminal
+        case .openTerminal: return openTerminal
         }
     }
 }

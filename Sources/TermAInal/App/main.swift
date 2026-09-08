@@ -95,13 +95,13 @@ if CommandLine.arguments.contains("--check-ctrld") {
     tabs.restore(nil)
     pump(2.5)
 
-    // A split pane must absorb its own Ctrl+D without taking the tab with it.
-    tabs.activePanes?.splitActivePane(direction: .horizontal)
+    // A second pane must absorb its own Ctrl+D without taking the tab with it.
+    tabs.activePanes?.addPane()
     pump(2.5)
-    print("after split             : \(tabs.activePanes?.root.allPaneIds.count ?? 0) pane(s), \(tabs.tabs.count) tab(s)")
+    print("after new pane          : \(tabs.activePanes?.paneIds.count ?? 0) pane(s), \(tabs.tabs.count) tab(s)")
     tabs.activePanes?.terminals[tabs.activePaneId ?? ""]?.sendToShell("\u{04}")
     pump(3)
-    print("after Ctrl+D in split   : \(tabs.activePanes?.root.allPaneIds.count ?? 0) pane(s), \(tabs.tabs.count) tab(s)")
+    print("after Ctrl+D in pane    : \(tabs.activePanes?.paneIds.count ?? 0) pane(s), \(tabs.tabs.count) tab(s)")
 
     tabs.addTab()
     pump(2.5)
@@ -154,6 +154,108 @@ if CommandLine.arguments.contains("--check-cloud") {
         SettingsStore.shared.setApiKey(existing, for: provider)
     }
     exit(0)
+}
+
+// `--check-accordion` covers the pane accordion: that expanding a pane does not
+// recreate the terminals (which would kill the running shells), that only the
+// expanded pane's terminal is in the hierarchy, and that a session round-trips
+// including the older nested-split format.
+if CommandLine.arguments.contains("--check-accordion") {
+    _ = NSApplication.shared
+    SettingsStore.shared.load()
+    func pump(_ s: TimeInterval) { RunLoop.main.run(until: Date().addingTimeInterval(s)) }
+    var failures = 0
+    func check(_ label: String, _ ok: Bool, _ detail: String = "") {
+        if !ok { failures += 1 }
+        print("  \(ok ? "ok  " : "FAIL") \(label)\(detail.isEmpty ? "" : "  — \(detail)")")
+    }
+
+    let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 600),
+                          styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+    let panes = PaneController()
+    let host = NSView()
+    host.addSubview(panes.containerView)
+    NSLayoutConstraint.activate([
+        panes.containerView.leadingAnchor.constraint(equalTo: host.leadingAnchor),
+        panes.containerView.trailingAnchor.constraint(equalTo: host.trailingAnchor),
+        panes.containerView.topAnchor.constraint(equalTo: host.topAnchor),
+        panes.containerView.bottomAnchor.constraint(equalTo: host.bottomAnchor),
+    ])
+    window.contentView = host
+    window.makeKeyAndOrderFront(nil)
+    pump(2)
+
+    panes.addPane(); pump(1.5)
+    panes.addPane(); pump(1.5)
+    check("three panes", panes.paneIds.count == 3, "\(panes.paneIds.count)")
+    check("newest is expanded", panes.expandedIndex == 2, "index \(panes.expandedIndex)")
+
+    let firstId = panes.paneIds[0]
+    let firstTerminal = panes.terminals[firstId]
+    let thirdId = panes.paneIds[2]
+
+    // Only the expanded pane's terminal should be mounted.
+    let mounted = panes.containerView.subviews.compactMap { $0 as? TerminalPaneView }.map(\.paneId)
+    check("only expanded terminal mounted", mounted == [thirdId], "\(mounted)")
+
+    // Expanding runs rebuild(); terminals must survive it.
+    panes.expandPane(at: 0); pump(1)
+    check("expand switches active", panes.activePaneId == firstId)
+    check("terminal object preserved", panes.terminals[firstId] === firstTerminal)
+    check("its shell still running", firstTerminal?.process.running == true)
+    let mounted2 = panes.containerView.subviews.compactMap { $0 as? TerminalPaneView }.map(\.paneId)
+    check("mounted follows expansion", mounted2 == [firstId], "\(mounted2)")
+
+    // Padding: the terminal must not touch the container edges. This has
+    // regressed twice — once absent entirely, once dropped in the accordion
+    // rewrite — so it is asserted rather than eyeballed.
+    if let expanded = panes.terminals[panes.activePaneId] {
+        let bounds = panes.containerView.bounds
+        let frame = expanded.frame
+        let left = frame.minX
+        let right = bounds.maxX - frame.maxX
+        check("terminal inset from edges", left >= 4 && right >= 4,
+              "left \(Int(left)), right \(Int(right))")
+        check("terminal not wider than container", frame.width <= bounds.width)
+    } else {
+        check("terminal inset from edges", false, "no expanded terminal")
+    }
+
+    // Headers: one per pane, stacked, non-zero height.
+    let headers = panes.containerView.subviews.compactMap { $0 as? AccordionHeader }
+    check("one header per pane", headers.count == 3, "\(headers.count)")
+    check("headers have height", headers.allSatisfy { $0.frame.height >= 20 })
+    let ys = headers.map { Int($0.frame.minY) }
+    check("headers do not overlap", Set(ys).count == ys.count, "\(ys)")
+
+    // Session round trip in the new flat format.
+    let snap = panes.captureSession()
+    check("captured 3 panes", snap.tabs.first?.panes.count == 3)
+    check("captured expansion", snap.tabs.first?.expanded == 0)
+    let restored = PaneController(restoring: snap); pump(2)
+    check("restored 3 panes", restored.paneIds.count == 3, "\(restored.paneIds.count)")
+    check("restored expansion", restored.expandedIndex == 0)
+    check("fresh pane ids", Set(restored.paneIds).isDisjoint(with: Set(panes.paneIds)))
+
+    // The older nested-split session format must flatten, not fail.
+    let legacy = """
+    {"tabs":[{"type":"group","direction":0,"children":[
+      {"type":"pane","cwd":"/tmp","label":"a"},
+      {"type":"group","direction":1,"children":[
+        {"type":"pane","cwd":"/usr","label":"b"},
+        {"type":"pane","cwd":"/var","label":"c"}]}]}],"selected":0}
+    """
+    if let data = legacy.data(using: .utf8),
+       let decoded = try? JSONDecoder().decode(SessionSnapshot.self, from: data) {
+        let cwds = decoded.tabs.first?.panes.map { $0.cwd ?? "?" } ?? []
+        check("legacy tree flattens", cwds == ["/tmp", "/usr", "/var"], "\(cwds)")
+    } else {
+        check("legacy tree flattens", false, "decode failed")
+    }
+
+    panes.terminateAll(); restored.terminateAll()
+    print(failures == 0 ? "\nall accordion checks pass" : "\n\(failures) failed")
+    exit(failures == 0 ? 0 : 1)
 }
 
 // SPM builds a bare executable, so the NSApplication lifecycle is set up by
