@@ -20,6 +20,16 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/TermAInal"
 
+# --- Bundled fonts ---
+# Registered by macOS at launch via ATSApplicationFontsPath (see Info.plist),
+# so the default font is right on a machine with no Nerd Font installed. No
+# system-wide installation happens.
+if [ -d Resources/Fonts ]; then
+    mkdir -p "$APP/Contents/Resources/Fonts"
+    cp Resources/Fonts/*.ttf "$APP/Contents/Resources/Fonts/" 2>/dev/null || true
+    cp Resources/Fonts/OFL.txt Resources/Fonts/NOTICE.md "$APP/Contents/Resources/Fonts/" 2>/dev/null || true
+fi
+
 # --- App icon ---
 # The repo ships build/icon.png (1024x1024) plus an icon.icns that contains
 # only a single 1024pt representation, which the Dock renders poorly. Generate
@@ -64,6 +74,7 @@ cat > "$APP/Contents/Info.plist" <<PLIST
     <key>CFBundleIdentifier</key><string>com.termainal.app</string>
     <key>CFBundleExecutable</key><string>TermAInal</string>
     <key>CFBundleIconFile</key><string>AppIcon</string>
+    <key>ATSApplicationFontsPath</key><string>Fonts</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>2.0.0-dev</string>
     <key>CFBundleVersion</key><string>1</string>

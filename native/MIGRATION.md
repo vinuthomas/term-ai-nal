@@ -198,6 +198,36 @@ Both were invisible to the headless checks and to `swift build` — the lesson i
 that a "port of X" comment is worth little unless the *reason* X looked odd is
 carried across with it.
 
+## The default font is bundled
+
+`Resources/Fonts/` ships **JetBrainsMonoNL Nerd Font Mono** (4 faces, ~9 MB),
+registered at launch through `ATSApplicationFontsPath` — no system install, and
+registration is scoped to the app. It is the first entry in `resolveFont`'s
+fallback list because it is the only one guaranteed to resolve; everything after
+it is a courtesy to whatever the user already installed.
+
+The point is machines that are not this one. The fallback stack only worked here
+by luck: this Mac has exactly one Nerd Font (MesloLGS NF, installed for
+Powerlevel10k) out of 8 monospaced families. A fresh machine falls through to
+Menlo, and measured against the glyphs this shell's prompt actually emits, Menlo
+is missing 6 of 10 — the powerline arrows, `U+F179`, `U+F015`, folder and git
+branch. That is the box-glyph bug returning for every other user.
+
+Two build choices worth keeping:
+
+- **NL (no ligatures).** SwiftTerm shapes with
+  `CTLineCreateWithAttributedString` and CoreText applies ligatures by default,
+  so they *would* render. In a cell-addressed grid a ligature spanning two cells
+  risks column and selection misalignment, so the no-ligature build removes the
+  question. Swapping in the ligature build is a four-file change.
+- **Mono.** Nerd Fonts ship icons double-width by default, which overflow a
+  terminal cell and shift everything after them. `Mono` forces single width.
+
+Licensing is in `Resources/Fonts/NOTICE.md`: JetBrains Mono is OFL 1.1, but the
+patched-in icon glyphs aggregate several upstream sets under mixed terms, some
+requiring attribution (Font Awesome is CC BY 4.0). Read that before shipping to
+anyone outside this repo.
+
 ## Theme contrast is enforced, not eyeballed
 
 `TermAInal --check-contrast` prints WCAG contrast ratios for the sidebar's

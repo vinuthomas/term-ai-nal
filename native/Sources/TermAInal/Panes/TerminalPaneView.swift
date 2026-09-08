@@ -60,6 +60,10 @@ final class TerminalPaneView: LocalProcessTerminalView {
     /// renders those glyphs as replacement boxes — which is exactly what
     /// dropping this stack during the port caused.
     private static let fontFallbacks = [
+        // Bundled with the app, so this is the only entry guaranteed to
+        // resolve. Everything after it is a courtesy to whatever the user
+        // already installed and preferred.
+        "JetBrainsMonoNL Nerd Font Mono",
         // Nerd Font variants — best Unicode plus icon coverage.
         "MesloLGS NF", "Hack Nerd Font Mono", "FiraCode Nerd Font Mono",
         "JetBrainsMono Nerd Font Mono", "CaskaydiaCove Nerd Font Mono",
