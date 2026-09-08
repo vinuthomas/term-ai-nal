@@ -1,64 +1,51 @@
 import AppKit
 
-/// An `NSSplitView` that divides its children evenly the first time it is given
-/// a real size.
+/// Owns a tab's panes and lays them out as a vertical accordion.
 ///
-/// `addArrangedSubview` on its own leaves every child at whatever frame it
-/// already had. Because this app reuses terminal views across relayouts, those
-/// frames are stale — often zero — so a fresh split came out at arbitrary and
-/// sometimes invisible proportions. Divider positions can only be set once the
-/// split itself has a width, which is why this happens in `layout()` rather
-/// than at construction.
-final class EvenSplitView: NSSplitView {
-    private var hasDistributed = false
-
-    override func layout() {
-        super.layout()
-        let count = arrangedSubviews.count
-        guard !hasDistributed, count > 1 else { return }
-
-        let total = isVertical ? bounds.width : bounds.height
-        guard total > 1 else { return }
-        hasDistributed = true
-
-        let each = (total - dividerThickness * CGFloat(count - 1)) / CGFloat(count)
-        var position: CGFloat = 0
-        for index in 0..<(count - 1) {
-            position += each
-            setPosition(position, ofDividerAt: index)
-            position += dividerThickness
-        }
-    }
-}
-
-/// Owns the pane tree and rebuilds the `NSSplitView` hierarchy from it.
+/// Panes are a flat, ordered list: one is expanded and shows its terminal, the
+/// rest collapse to just their header. This replaced a recursive tree of split
+/// groups and four split directions — that structure existed to describe
+/// arbitrary nested splits, and with panes stacked in one direction there is
+/// nothing for it to describe.
 ///
 /// Terminal views live in `terminals`, keyed by pane id, and are *re-parented*
-/// into freshly built split views rather than recreated — the same trick the
-/// Electron renderer used with its module-level `globalTerminals` map in
-/// `TerminalPane.tsx`, and for the same reason: a rebuilt layout must not kill
-/// a running shell.
-final class PaneController {
-    private(set) var root: PaneNode
+/// when the layout is rebuilt rather than recreated. That is not an
+/// optimisation: recreating them kills the running shells.
+final class PaneController: NSObject, AccordionHeaderDelegate {
+    private(set) var panes: [TerminalPaneModel] = []
     private(set) var terminals: [String: TerminalPaneView] = [:]
-    /// One padded wrapper per pane. These are what get inserted into the split
-    /// views; the terminal itself is inset inside its wrapper.
-    private var paneContainers: [String: NSView] = [:]
-    private(set) var activePaneId: String
+    private(set) var expandedIndex: Int = 0
 
-    /// Host view the layout is mounted into.
-    let containerView = NSView()
+    /// Host view the accordion is mounted into.
+    ///
+    /// A subclass so the accordion reflows when the window resizes: rows are
+    /// laid out by frame, so nothing reflows on its own the way Auto Layout
+    /// would.
+    let containerView = AccordionContainerView()
 
     var onActivePaneChange: ((String) -> Void)?
-    /// Fires when the active pane's shell reports a new title or directory, so
-    /// a tab label can follow what the pane is actually doing.
     var onTitleChange: ((String) -> Void)?
-    /// Fires when the last pane in this controller has gone, so a tab holding
-    /// it can close itself.
+    /// Fires when the last pane has gone, so the owning tab can close itself.
     var onEmpty: (() -> Void)?
 
-    /// The fuller form, for a window title: a whole path, or whatever a program
-    /// named itself. Home is abbreviated the way a shell would write it.
+    private var headers: [String: AccordionHeader] = [:]
+
+    // MARK: - Identity
+
+    static func newPaneId() -> String {
+        "pane-\(UUID().uuidString.prefix(8))"
+    }
+
+    var activePaneId: String {
+        panes.indices.contains(expandedIndex) ? panes[expandedIndex].paneId : (panes.first?.paneId ?? "")
+    }
+
+    var activeTerminal: TerminalPaneView? { terminals[activePaneId] }
+
+    var paneIds: [String] { panes.map(\.paneId) }
+
+    /// The fuller form, for a window title: a whole path with home abbreviated,
+    /// or whatever a program named itself.
     var windowTitle: String {
         guard let terminal = terminals[activePaneId] else { return "term-ai-nal" }
         if let title = terminal.reportedTitle, !title.isEmpty { return title }
@@ -66,8 +53,7 @@ final class PaneController {
         return "term-ai-nal"
     }
 
-    /// The compact form, for a tab label: just the last path component, since a
-    /// tab is too narrow for a path and the leaf is what identifies it.
+    /// The compact form, for a tab label: the last path component only.
     var displayTitle: String {
         let title = windowTitle
         guard title.contains("/") else { return title }
@@ -82,159 +68,242 @@ final class PaneController {
         return path
     }
 
-    /// Restores `snapshot` when one is supplied and usable, otherwise starts
-    /// with a single pane. Restoring happens before the first `rebuild()` so a
-    /// throwaway shell is never spawned only to be killed.
-    /// A fresh single-pane controller, optionally starting in `cwd`. Used when
-    /// a new tab is opened next to an existing one.
-    /// A fresh single-pane controller whose shell *starts* in `cwd`.
-    ///
-    /// The directory is set on the node before `rebuild()`, so it reaches
-    /// `startProcess(currentDirectory:)` at spawn time. An earlier version
-    /// spawned in the home directory and sent `cd … && clear` afterwards, which
-    /// left the command in shell history and briefly showed the wrong
-    /// directory.
+    /// The title shown on one pane's header, independent of which is expanded.
+    private func headerTitle(for pane: TerminalPaneModel) -> String {
+        if let label = pane.label, !label.isEmpty { return label }
+        guard let terminal = terminals[pane.paneId] else { return "shell" }
+        if let title = terminal.reportedTitle, !title.isEmpty { return title }
+        if let cwd = terminal.currentCwd { return Self.abbreviatingHome(cwd) }
+        return "shell"
+    }
+
+    // MARK: - Init
+
+    /// A fresh single-pane controller whose shell starts in `cwd`.
     convenience init(startingIn cwd: String?) {
         self.init(restoring: SessionSnapshot(
-            tabs: [SessionSnapshot.Node(type: "pane", cwd: cwd)],
+            tabs: [SessionSnapshot.Tab(panes: [SessionSnapshot.Pane(cwd: cwd, label: nil)], expanded: 0)],
             selected: 0
         ))
     }
 
     init(restoring snapshot: SessionSnapshot? = nil) {
-        if let snapshot,
-           let first = snapshot.tabs.first,
-           let restored = PaneNode.from(first, newPaneId: Self.newPaneId),
-           let first = restored.allPaneIds.first {
-            root = restored
-            activePaneId = first
-        } else {
-            let firstPaneId = Self.newPaneId()
-            root = .pane(paneId: firstPaneId)
-            activePaneId = firstPaneId
-        }
+        super.init()
         containerView.translatesAutoresizingMaskIntoConstraints = false
-        root.renumberPanes()
-        rebuild()
-    }
+        containerView.onLayout = { [weak self] in self?.layoutAccordion() }
 
-    private func notifyTitleIfActive(_ paneId: String) {
-        guard paneId == activePaneId else { return }
-        onTitleChange?(displayTitle)
-    }
-
-    /// Snapshot of the current layout, with each pane's live directory.
-    func captureSession() -> SessionSnapshot {
-        SessionSnapshot(
-            tabs: [root.snapshotNode { [weak self] paneId in
-                self?.terminals[paneId]?.currentCwd
-            }],
-            selected: 0
-        )
-    }
-
-    /// Kills every shell in this controller. Called when its tab closes.
-    func terminateAll() {
-        for (paneId, terminal) in terminals {
-            terminal.terminate()
-            terminal.removeFromSuperview()
-            OutputBuffer.shared.cleanup(paneId: paneId)
-            CommandLog.shared.clear(paneId: paneId)
+        if let tab = snapshot?.tabs.first, !tab.panes.isEmpty {
+            panes = tab.panes.map { TerminalPaneModel(paneId: Self.newPaneId(), cwd: $0.cwd, label: $0.label) }
+            expandedIndex = min(max(0, tab.expanded), panes.count - 1)
+        } else {
+            panes = [TerminalPaneModel(paneId: Self.newPaneId())]
+            expandedIndex = 0
         }
-        terminals.removeAll()
-        paneContainers.removeAll()
-    }
-
-    static func newPaneId() -> String {
-        "pane-\(UUID().uuidString.prefix(8))"
-    }
-
-    var activeTerminal: TerminalPaneView? {
-        terminals[activePaneId]
+        rebuild()
     }
 
     // MARK: - Mutations
 
-    /// Splits the active pane. `direction` is the axis children are laid along;
-    /// `before` inserts the new pane ahead of the current one (the Cmd+Alt
-    /// "split left/up" variants).
-    func splitActivePane(direction: NSUserInterfaceLayoutOrientation, before: Bool = false) {
-        guard let current = root.findPane(paneId: activePaneId) else { return }
-
-        let newPaneId = Self.newPaneId()
-        // Inherit the current pane's directory so a split opens where you were.
-        let inheritedCwd = NewPaneDirectory.resolve(
-            inheriting: terminals[activePaneId]?.currentCwd ?? current.cwd
+    /// Adds a pane below the expanded one and expands it.
+    func addPane() {
+        let inherited = NewPaneDirectory.resolve(
+            inheriting: activeTerminal?.currentCwd ?? panes[safe: expandedIndex]?.cwd
         )
-        let newPane = PaneNode.pane(paneId: newPaneId, cwd: inheritedCwd)
-
-        let movedPane = PaneNode.pane(paneId: current.paneId!, cwd: current.cwd)
-        let ordered = before ? [newPane, movedPane] : [movedPane, newPane]
-
-        if let (parent, index) = root.findParent(of: current), parent.direction == direction {
-            // Same axis: extend the existing split instead of nesting a new one.
-            parent.children.remove(at: index)
-            parent.children.insert(contentsOf: ordered, at: index)
-        } else if root === current {
-            root = .group(direction: direction, children: ordered)
-        } else if let (parent, index) = root.findParent(of: current) {
-            parent.children[index] = .group(direction: direction, children: ordered)
-        }
-
-        activePaneId = newPaneId
-        root.renumberPanes()
+        let insertAt = min(expandedIndex + 1, panes.count)
+        panes.insert(TerminalPaneModel(paneId: Self.newPaneId(), cwd: inherited), at: insertAt)
+        expandedIndex = insertAt
         rebuild()
         onActivePaneChange?(activePaneId)
+        onTitleChange?(displayTitle)
     }
 
     func closeActivePane() {
-        // The last pane closing means the tab is done; the tab owner decides
+        // The last pane closing means the tab is done; the owner decides
         // whether that is allowed, since it knows how many tabs remain.
-        guard root.allPanes.count > 1 else {
+        guard panes.count > 1 else {
             onEmpty?()
             return
         }
-        guard let current = root.findPane(paneId: activePaneId) else { return }
-
-        let remaining = root.allPaneIds.filter { $0 != activePaneId }
-
-        if let (parent, index) = root.findParent(of: current) {
-            parent.children.remove(at: index)
-        }
-        root.pruneEmptyGroups()
-
-        terminals[activePaneId]?.terminate()
-        paneContainers[activePaneId]?.removeFromSuperview()
-        paneContainers.removeValue(forKey: activePaneId)
-        terminals.removeValue(forKey: activePaneId)
-
-        activePaneId = remaining.first ?? activePaneId
-        root.renumberPanes()
-        rebuild()
-        onActivePaneChange?(activePaneId)
+        close(paneId: activePaneId)
     }
 
+    private func close(paneId: String) {
+        guard let index = panes.firstIndex(where: { $0.paneId == paneId }) else { return }
+        guard panes.count > 1 else {
+            onEmpty?()
+            return
+        }
+
+        panes.remove(at: index)
+        teardown(paneId: paneId)
+        // Keep the selection where the eye is: the pane that took its place,
+        // or the last one if it was the tail.
+        expandedIndex = min(index, panes.count - 1)
+        rebuild()
+        onActivePaneChange?(activePaneId)
+        onTitleChange?(displayTitle)
+    }
+
+    private func teardown(paneId: String) {
+        terminals[paneId]?.terminate()
+        terminals[paneId]?.removeFromSuperview()
+        terminals.removeValue(forKey: paneId)
+        headers[paneId]?.removeFromSuperview()
+        headers.removeValue(forKey: paneId)
+        OutputBuffer.shared.cleanup(paneId: paneId)
+        CommandLog.shared.clear(paneId: paneId)
+    }
+
+    func expandPane(at index: Int) {
+        guard panes.indices.contains(index), index != expandedIndex else {
+            focusExpanded()
+            return
+        }
+        expandedIndex = index
+        rebuild()
+        onActivePaneChange?(activePaneId)
+        onTitleChange?(displayTitle)
+    }
+
+    /// `Cmd+Alt+1`…`9`.
     func focusPane(number: Int) {
-        guard let target = root.findPane(number: number), let paneId = target.paneId else { return }
-        focusPane(paneId: paneId)
+        expandPane(at: number - 1)
     }
 
     func focusPane(paneId: String) {
-        guard let terminal = terminals[paneId] else { return }
-        activePaneId = paneId
-        terminal.window?.makeFirstResponder(terminal)
-        onActivePaneChange?(paneId)
+        guard let index = panes.firstIndex(where: { $0.paneId == paneId }) else { return }
+        expandPane(at: index)
+    }
+
+    // MARK: - Layout
+
+    /// Rebuilds the stack, reusing terminal views and headers.
+    ///
+    /// Every collapsed pane contributes only its header height; the expanded one
+    /// takes whatever is left. Frame-based rather than Auto Layout because the
+    /// arithmetic is one expression and the views are reparented constantly.
+    func rebuild() {
+        containerView.subviews.forEach { $0.removeFromSuperview() }
+
+        for (index, pane) in panes.enumerated() {
+            let header = self.header(for: pane, index: index)
+            header.isExpanded = index == expandedIndex
+            header.title = headerTitle(for: pane)
+            header.shortcutHint = index < 9 ? "\u{2318}\u{2325}\(index + 1)" : nil
+            containerView.addSubview(header)
+
+            let terminal = self.terminal(for: pane)
+            if index == expandedIndex {
+                containerView.addSubview(terminal)
+            } else {
+                terminal.removeFromSuperview()
+            }
+        }
+
+        // Drop terminals whose panes are gone.
+        let live = Set(paneIds)
+        for paneId in terminals.keys where !live.contains(paneId) {
+            teardown(paneId: paneId)
+        }
+
+        containerView.needsLayout = true
+        layoutAccordion()
+        focusExpanded()
+    }
+
+    /// Called by the host on resize, and after any rebuild.
+    func layoutAccordion() {
+        let bounds = containerView.bounds
+        guard bounds.height > 0 else { return }
+
+        let headerHeight = AccordionHeader.height
+        let collapsedCount = max(0, panes.count - 1)
+        // A single pane needs no header at all — one row of chrome describing
+        // the only thing on screen is pure noise.
+        let showHeaders = panes.count > 1
+        let chrome = showHeaders ? headerHeight * CGFloat(panes.count) : 0
+        let terminalHeight = max(0, bounds.height - chrome)
+        _ = collapsedCount
+
+        var y = bounds.maxY
+        for (index, pane) in panes.enumerated() {
+            if showHeaders {
+                y -= headerHeight
+                headers[pane.paneId]?.isHidden = false
+                headers[pane.paneId]?.frame = NSRect(x: 0, y: y, width: bounds.width, height: headerHeight)
+            } else {
+                headers[pane.paneId]?.isHidden = true
+            }
+            if index == expandedIndex, let terminal = terminals[pane.paneId] {
+                y -= terminalHeight
+                terminal.frame = NSRect(x: 0, y: y, width: bounds.width, height: terminalHeight)
+            }
+        }
+    }
+
+    private func focusExpanded() {
+        guard let terminal = activeTerminal else { return }
+        DispatchQueue.main.async {
+            terminal.window?.makeFirstResponder(terminal)
+        }
+    }
+
+    private func header(for pane: TerminalPaneModel, index: Int) -> AccordionHeader {
+        if let existing = headers[pane.paneId] {
+            existing.removeFromSuperview()
+            return existing
+        }
+        let header = AccordionHeader(frame: .zero)
+        header.delegate = self
+        // The initializer paints with the default theme, so a new header has to
+        // be told the current one or it arrives mismatched.
+        header.applyTheme(TerminalThemes.theme(forKey: SettingsStore.shared.settings.theme))
+        headers[pane.paneId] = header
+        return header
+    }
+
+    private func terminal(for pane: TerminalPaneModel) -> TerminalPaneView {
+        if let existing = terminals[pane.paneId] {
+            existing.removeFromSuperview()
+            return existing
+        }
+
+        let paneId = pane.paneId
+        let terminal = TerminalPaneView(paneId: paneId, frame: .zero)
+        terminal.onCwdChange = { [weak self, weak pane] directory in
+            pane?.cwd = directory
+            self?.paneTitleChanged(paneId)
+        }
+        terminal.onTitleChange = { [weak self] _ in
+            self?.paneTitleChanged(paneId)
+        }
+        terminal.onOutput = { text in
+            OutputBuffer.shared.append(paneId: paneId, text: text)
+            CommandLog.shared.ingest(paneId: paneId, text: text)
+        }
+        terminal.onProcessExit = { [weak self] _ in
+            // The shell exited on its own (`exit`, Ctrl-D).
+            DispatchQueue.main.async { self?.close(paneId: paneId) }
+        }
+        terminals[paneId] = terminal
+        applyAppearance(to: terminal)
+        terminal.start(cwd: pane.cwd)
+        return terminal
+    }
+
+    private func paneTitleChanged(_ paneId: String) {
+        if let pane = panes.first(where: { $0.paneId == paneId }) {
+            headers[paneId]?.title = headerTitle(for: pane)
+        }
+        if paneId == activePaneId { onTitleChange?(displayTitle) }
     }
 
     // MARK: - Appearance
 
-    /// Re-reads settings and pushes appearance to every live pane. Called after
-    /// the settings UI commits a change; the Electron build achieved this by
-    /// re-rendering `TerminalPane` with new xterm.js options.
     func applyAppearanceToAll() {
-        for terminal in terminals.values {
-            applyAppearance(to: terminal)
-        }
+        let theme = TerminalThemes.theme(forKey: SettingsStore.shared.settings.theme)
+        for terminal in terminals.values { applyAppearance(to: terminal) }
+        for header in headers.values { header.applyTheme(theme) }
     }
 
     private func applyAppearance(to terminal: TerminalPaneView) {
@@ -246,120 +315,57 @@ final class PaneController {
         )
     }
 
-    // MARK: - View construction
+    // MARK: - Session
 
-    /// Rebuilds the split hierarchy, reusing existing terminal views.
-    func rebuild() {
-        containerView.subviews.forEach { $0.removeFromSuperview() }
-        let layout = buildView(for: root)
-        layout.translatesAutoresizingMaskIntoConstraints = false
-        containerView.addSubview(layout)
-        NSLayoutConstraint.activate([
-            layout.leadingAnchor.constraint(equalTo: containerView.leadingAnchor),
-            layout.trailingAnchor.constraint(equalTo: containerView.trailingAnchor),
-            layout.topAnchor.constraint(equalTo: containerView.topAnchor),
-            layout.bottomAnchor.constraint(equalTo: containerView.bottomAnchor),
-        ])
-
-        // Drop terminals whose panes no longer exist.
-        let live = Set(root.allPaneIds)
-        for (paneId, view) in terminals where !live.contains(paneId) {
-            view.terminate()
-            view.removeFromSuperview()
-            paneContainers[paneId]?.removeFromSuperview()
-            paneContainers.removeValue(forKey: paneId)
-            terminals.removeValue(forKey: paneId)
-        }
-
-        if let active = terminals[activePaneId] {
-            DispatchQueue.main.async {
-                active.window?.makeFirstResponder(active)
-            }
-        }
+    func captureSession() -> SessionSnapshot {
+        SessionSnapshot(
+            tabs: [SessionSnapshot.Tab(
+                panes: panes.map {
+                    SessionSnapshot.Pane(cwd: terminals[$0.paneId]?.currentCwd ?? $0.cwd, label: $0.label)
+                },
+                expanded: expandedIndex
+            )],
+            selected: 0
+        )
     }
 
-    private func buildView(for node: PaneNode) -> NSView {
-        switch node.kind {
-        case .pane:
-            return terminalView(for: node)
-
-        case .group:
-            let split = EvenSplitView()
-            // A `.horizontal` group lays its children out left-to-right, which
-            // AppKit expresses as a vertically-oriented divider.
-            split.isVertical = (node.direction == .horizontal)
-            split.dividerStyle = .thin
-            split.translatesAutoresizingMaskIntoConstraints = false
-            for child in node.children {
-                let childView = buildView(for: child)
-                childView.translatesAutoresizingMaskIntoConstraints = true
-                split.addArrangedSubview(childView)
-            }
-            return split
-        }
+    /// Kills every shell here. Called when the owning tab closes.
+    func terminateAll() {
+        for paneId in Array(terminals.keys) { teardown(paneId: paneId) }
+        panes.removeAll()
     }
 
-    private func terminalView(for node: PaneNode) -> NSView {
-        guard let paneId = node.paneId else { return NSView() }
+    // MARK: - AccordionHeaderDelegate
 
-        if let existing = paneContainers[paneId] {
-            existing.removeFromSuperview()
-            return existing
-        }
-
-        let terminal = TerminalPaneView(paneId: paneId, frame: .zero)
-        terminal.onCwdChange = { [weak self, weak node] directory in
-            node?.cwd = directory
-            self?.notifyTitleIfActive(paneId)
-        }
-        terminal.onTitleChange = { [weak self] _ in
-            self?.notifyTitleIfActive(paneId)
-        }
-        terminal.onOutput = { text in
-            OutputBuffer.shared.append(paneId: paneId, text: text)
-            // Same stream, two consumers: a flat buffer for MCP reads and a
-            // structured command log for the assistant.
-            CommandLog.shared.ingest(paneId: paneId, text: text)
-        }
-        terminal.onProcessExit = { [weak self] _ in
-            // The shell exited on its own (`exit`, Ctrl-D) — mirror the Electron
-            // behaviour and close the pane.
-            guard let self else { return }
-            DispatchQueue.main.async {
-                let previouslyActive = self.activePaneId
-                self.activePaneId = paneId
-                self.closeActivePane()
-                if previouslyActive != paneId, self.terminals[previouslyActive] != nil {
-                    self.focusPane(paneId: previouslyActive)
-                }
-            }
-        }
-        terminals[paneId] = terminal
-        applyAppearance(to: terminal)
-        terminal.start(cwd: node.cwd)
-
-        let container = Self.padded(terminal)
-        paneContainers[paneId] = container
-        return container
+    func accordionHeaderDidActivate(_ header: AccordionHeader) {
+        guard let paneId = headers.first(where: { $0.value === header })?.key else { return }
+        focusPane(paneId: paneId)
     }
 
-    /// Insets a terminal inside a transparent wrapper.
-    ///
-    /// SwiftTerm draws glyphs flush to its own bounds and offers no inset of its
-    /// own, so without this the first column collides with the window edge and,
-    /// in a split, with the divider. iTerm2 and Terminal.app both leave a
-    /// margin. The wrapper stays transparent so the window's themed background
-    /// shows through and the gap is invisible.
-    private static func padded(_ terminal: NSView) -> NSView {
-        let container = NSView()
-        terminal.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(terminal)
-        NSLayoutConstraint.activate([
-            terminal.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 8),
-            terminal.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -8),
-            terminal.topAnchor.constraint(equalTo: container.topAnchor, constant: 6),
-            terminal.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -6),
-        ])
-        return container
+    func accordionHeaderDidRequestClose(_ header: AccordionHeader) {
+        guard let paneId = headers.first(where: { $0.value === header })?.key else { return }
+        close(paneId: paneId)
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
+    }
+}
+
+
+/// The accordion's host view, which reports its own relayout.
+///
+/// Rows are positioned by frame — the heights are one expression (every
+/// collapsed pane contributes its header, the expanded one takes the rest) and
+/// the views are reparented on every rebuild, which Auto Layout handles poorly.
+/// The cost is that resizing has to be observed rather than inherited.
+final class AccordionContainerView: NSView {
+    var onLayout: (() -> Void)?
+
+    override func layout() {
+        super.layout()
+        onLayout?()
     }
 }

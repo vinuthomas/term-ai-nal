@@ -62,7 +62,7 @@ final class TabController: NSObject, TabBarViewDelegate {
     /// tab is still a live shell an agent may be driving.
     var allPanes: [(paneId: String, controller: PaneController)] {
         tabs.flatMap { tab in
-            tab.panes.root.allPaneIds.map { ($0, tab.panes) }
+            tab.panes.paneIds.map { ($0, tab.panes) }
         }
     }
 
@@ -170,7 +170,7 @@ final class TabController: NSObject, TabBarViewDelegate {
     // MARK: - Tabs
 
     @discardableResult
-    func addTab(restoring snapshot: SessionSnapshot.Node? = nil, cwd: String? = nil) -> TerminalTab {
+    func addTab(restoring snapshot: SessionSnapshot.Tab? = nil, cwd: String? = nil) -> TerminalTab {
         let controller: PaneController
         if let snapshot {
             controller = PaneController(restoring: SessionSnapshot(tabs: [snapshot], selected: 0))
@@ -274,7 +274,9 @@ final class TabController: NSObject, TabBarViewDelegate {
 
     func captureSession() -> SessionSnapshot {
         SessionSnapshot(
-            tabs: tabs.map { $0.panes.captureSession().tabs.first ?? SessionSnapshot.Node(type: "pane") },
+            tabs: tabs.map {
+                $0.panes.captureSession().tabs.first ?? SessionSnapshot.Tab(panes: [], expanded: 0)
+            },
             selected: selectedIndex
         )
     }

@@ -390,7 +390,34 @@ where the incoming one sits in the order, with no direction logic anywhere.
 Because the offset is a function of viewport width it is recomputed on resize
 rather than stored.
 
-### The split bug
+### Splits became an accordion
+
+Panes inside a tab are now a flat, ordered list laid out as a vertical
+accordion: one expanded showing its terminal, the rest collapsed to a header
+row with title and shortcut. `Cmd+D` adds a row; a single pane shows no header,
+since one row of chrome describing the only thing on screen is noise.
+
+That removed the recursive `PaneNode` tree, its four split directions, and
+`EvenSplitView` — roughly 120 lines of tree manipulation. The tree existed to
+describe arbitrary nested splits; with panes in one axis and one expanded, there
+was nothing left for it to describe.
+
+Two consequences worth knowing:
+
+- **The re-parenting invariant is now load-bearing far more often.**
+  `rebuild()` runs on every *expand*, not just on adding or closing a pane, so
+  a regression that recreates terminal views would kill running shells on an
+  ordinary pane switch. `--check-accordion` asserts object identity and
+  `process.running` across an expand.
+- **Layout is frame-based, so resize has to be observed.** The heights are one
+  expression and the views are reparented constantly, which Auto Layout handles
+  poorly; `AccordionContainerView.layout()` calls back into `layoutAccordion()`.
+
+Sessions written with nested splits still restore: `LegacyNode` decodes the old
+tree and flattens it depth-first, which is the order the panes appeared on
+screen. Verified against a hand-written two-level tree.
+
+### The split bug (historical)
 
 Splits genuinely were broken, and not subtly: `buildView` called
 `addArrangedSubview` and **never set a divider position**. `NSSplitView` then

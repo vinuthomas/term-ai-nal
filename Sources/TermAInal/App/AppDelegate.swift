@@ -274,13 +274,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             var infos: [MCPPaneInfo] = []
             var number = 1
             for tab in self.tabs.tabs {
-                for node in tab.panes.root.allPanes {
-                    guard let paneId = node.paneId else { continue }
+                for pane in tab.panes.panes {
                     infos.append(MCPPaneInfo(
-                        paneId: paneId,
+                        paneId: pane.paneId,
                         paneNumber: number,
-                        label: node.label ?? tab.title,
-                        cwd: tab.panes.terminals[paneId]?.currentCwd ?? node.cwd
+                        label: pane.label ?? tab.title,
+                        cwd: tab.panes.terminals[pane.paneId]?.currentCwd ?? pane.cwd
                     ))
                     number += 1
                 }
@@ -349,10 +348,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             addItem(to: shellMenu, "Tab \(number)", #selector(selectTab(_:)), "\(number)", [.command], tag: number)
         }
         shellMenu.addItem(.separator())
-        addItem(to: shellMenu, "Split Right", #selector(splitRight), "d", [.command])
-        addItem(to: shellMenu, "Split Down", #selector(splitDown), "d", [.command, .shift])
-        addItem(to: shellMenu, "Split Left", #selector(splitLeft), "d", [.command, .option])
-        addItem(to: shellMenu, "Split Up", #selector(splitUp), "d", [.command, .shift, .option])
+        addItem(to: shellMenu, "New Pane", #selector(addPane), "d", [.command])
         addItem(to: shellMenu, "Close Pane", #selector(closePane), "w", [.command])
         for number in 1...9 {
             addItem(to: shellMenu, "Focus Pane \(number)", #selector(focusPane(_:)), "\(number)", [.command, .option], tag: number)
@@ -401,11 +397,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     @objc private func previousTab() { tabs.selectPreviousTab() }
     @objc private func selectTab(_ sender: NSMenuItem) { tabs.selectTab(at: sender.tag - 1) }
 
-    // Splits, within the frontmost tab
-    @objc private func splitRight() { panes?.splitActivePane(direction: .horizontal) }
-    @objc private func splitDown() { panes?.splitActivePane(direction: .vertical) }
-    @objc private func splitLeft() { panes?.splitActivePane(direction: .horizontal, before: true) }
-    @objc private func splitUp() { panes?.splitActivePane(direction: .vertical, before: true) }
+    // Panes, within the frontmost tab
+    @objc private func addPane() { panes?.addPane() }
     @objc private func closePane() { panes?.closeActivePane() }
     @objc private func focusPane(_ sender: NSMenuItem) { panes?.focusPane(number: sender.tag) }
 
