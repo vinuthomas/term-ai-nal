@@ -294,6 +294,10 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private let fontSizeStepper = NSStepper()
     private let themePopup = NSPopUpButton()
     private let restoreSessionCheckbox = NSButton()
+    private let newPanePopup = NSPopUpButton()
+    private let newPaneCustomField = NSTextField()
+    private let newPaneChooseButton = NSButton()
+    private var terminalGrid: NSGridView!
 
     // MCP tab
     private let mcpEnabledCheckbox = NSButton()
@@ -314,6 +318,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     /// Index-aligned with the Insights popup's items.
     private static let insightModes = ["off", "failures", "all"]
+
+    /// Index-aligned with the "New tab or split opens in" popup.
+    private static let newPaneModes = ["inherit", "home", "custom"]
 
     init() {
         draft = SettingsStore.shared.settings
@@ -488,13 +495,61 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         hint.font = .systemFont(ofSize: 11)
         hint.textColor = .secondaryLabelColor
 
-        return wrap(form([
+        newPanePopup.addItem(withTitle: "The current tab's folder")
+        newPanePopup.addItem(withTitle: "Home folder")
+        newPanePopup.addItem(withTitle: "A specific folder…")
+        newPanePopup.target = self
+        newPanePopup.action = #selector(newPaneModeChanged)
+
+        newPaneCustomField.placeholderString = "~/code"
+        newPaneCustomField.widthAnchor.constraint(greaterThanOrEqualToConstant: 240).isActive = true
+        newPaneChooseButton.title = "Choose…"
+        newPaneChooseButton.target = self
+        newPaneChooseButton.action = #selector(chooseNewPaneDirectory)
+        let customRow = NSStackView(views: [newPaneCustomField, newPaneChooseButton])
+        customRow.orientation = .horizontal
+        customRow.spacing = 8
+
+        // One preference for both: a tab and a split are each "another shell,
+        // opened from here", and having them disagree would be arbitrary.
+        terminalGrid = form([
             ("Font", fontCombo),
             ("Size", sizeRow),
             ("Theme", themePopup),
+            ("New shells open in", newPanePopup),
+            ("Folder", customRow),
             ("", restoreSessionCheckbox),
             ("", hint),
-        ]))
+        ])
+        return wrap(terminalGrid)
+    }
+
+    /// The custom-folder row is only meaningful for the custom mode.
+    private func updateNewPaneVisibility() {
+        let mode = Self.newPaneModes[min(max(0, newPanePopup.indexOfSelectedItem), Self.newPaneModes.count - 1)]
+        terminalGrid.row(at: 4).isHidden = mode != "custom"
+    }
+
+    @objc private func newPaneModeChanged() {
+        updateNewPaneVisibility()
+    }
+
+    @objc private func chooseNewPaneDirectory() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: (newPaneCustomField.stringValue as NSString).expandingTildeInPath)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        newPaneCustomField.stringValue = Self.abbreviatingHome(url.path)
+    }
+
+    /// Stored the way a user would type it, so the field stays readable.
+    private static func abbreviatingHome(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
     }
 
     private func buildMCPTab() -> NSView {
@@ -568,6 +623,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             themePopup.selectItem(at: index)
         }
         restoreSessionCheckbox.state = draft.restoreSession ? .on : .off
+        newPanePopup.selectItem(at: Self.newPaneModes.firstIndex(of: draft.newPaneDirectory) ?? 0)
+        newPaneCustomField.stringValue = draft.newPaneCustomDirectory
+        updateNewPaneVisibility()
 
         mcpEnabledCheckbox.state = draft.mcpEnabled ? .on : .off
         mcpPortField.stringValue = String(draft.mcpPort)
@@ -600,6 +658,12 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
             draft.theme = TerminalThemes.all[themeIndex].key
         }
         draft.restoreSession = restoreSessionCheckbox.state == .on
+        let paneModeIndex = newPanePopup.indexOfSelectedItem
+        if Self.newPaneModes.indices.contains(paneModeIndex) {
+            draft.newPaneDirectory = Self.newPaneModes[paneModeIndex]
+        }
+        draft.newPaneCustomDirectory = newPaneCustomField.stringValue
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         draft.assistantEnabled = assistantEnabledCheckbox.state == .on
         let insightIndex = assistantInsightsPopup.indexOfSelectedItem
         if Self.insightModes.indices.contains(insightIndex) {

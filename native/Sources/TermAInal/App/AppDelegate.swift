@@ -336,7 +336,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     // MARK: - Actions
 
     // Tabs
-    @objc private func newTab() { tabs.addTab(cwd: panes?.activeTerminal?.currentCwd) }
+    @objc private func newTab() {
+        tabs.addTab(cwd: NewPaneDirectory.resolve(inheriting: panes?.activeTerminal?.currentCwd))
+    }
     @objc private func closeTab() { tabs.closeSelectedTab() }
     @objc private func nextTab() { tabs.selectNextTab() }
     @objc private func previousTab() { tabs.selectPreviousTab() }

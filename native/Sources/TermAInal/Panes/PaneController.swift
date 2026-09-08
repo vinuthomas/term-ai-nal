@@ -87,14 +87,18 @@ final class PaneController {
     /// throwaway shell is never spawned only to be killed.
     /// A fresh single-pane controller, optionally starting in `cwd`. Used when
     /// a new tab is opened next to an existing one.
+    /// A fresh single-pane controller whose shell *starts* in `cwd`.
+    ///
+    /// The directory is set on the node before `rebuild()`, so it reaches
+    /// `startProcess(currentDirectory:)` at spawn time. An earlier version
+    /// spawned in the home directory and sent `cd … && clear` afterwards, which
+    /// left the command in shell history and briefly showed the wrong
+    /// directory.
     convenience init(startingIn cwd: String?) {
-        self.init(restoring: nil)
-        if let cwd {
-            root.allPanes.first?.cwd = cwd
-            // The pane was already built by init, so point the live shell at it
-            // rather than rebuilding: cd is cheaper than a second spawn.
-            terminals[activePaneId]?.sendToShell("cd \(cwd.replacingOccurrences(of: "\"", with: "\\\"")) && clear\n")
-        }
+        self.init(restoring: SessionSnapshot(
+            tabs: [SessionSnapshot.Node(type: "pane", cwd: cwd)],
+            selected: 0
+        ))
     }
 
     init(restoring snapshot: SessionSnapshot? = nil) {
@@ -159,7 +163,9 @@ final class PaneController {
 
         let newPaneId = Self.newPaneId()
         // Inherit the current pane's directory so a split opens where you were.
-        let inheritedCwd = terminals[activePaneId]?.currentCwd ?? current.cwd
+        let inheritedCwd = NewPaneDirectory.resolve(
+            inheriting: terminals[activePaneId]?.currentCwd ?? current.cwd
+        )
         let newPane = PaneNode.pane(paneId: newPaneId, cwd: inheritedCwd)
 
         let movedPane = PaneNode.pane(paneId: current.paneId!, cwd: current.cwd)

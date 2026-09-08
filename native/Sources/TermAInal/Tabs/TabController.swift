@@ -290,6 +290,6 @@ final class TabController: NSObject, TabBarViewDelegate {
     }
 
     func tabBarDidRequestNewTab(_ bar: TabBarView) {
-        addTab(cwd: activePanes?.activeTerminal?.currentCwd)
+        addTab(cwd: NewPaneDirectory.resolve(inheriting: activePanes?.activeTerminal?.currentCwd))
     }
 }

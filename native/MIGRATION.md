@@ -318,6 +318,24 @@ Positions can only be set once the split itself has a width, hence `layout()`
 rather than construction. Measured after the fix: child widths `[599, 599]`,
 spread 0.
 
+### Where a new shell starts
+
+`newPaneDirectory` is `inherit` (default), `home`, or `custom` with
+`newPaneCustomDirectory`. Set on the Terminal tab, where the folder field
+appears only for the custom mode and has a Choose… panel.
+
+One preference covers **both tabs and splits**: each is "another shell, opened
+from here", and having them disagree about the starting directory would be
+arbitrary. A custom path that no longer resolves falls back to inheriting rather
+than dumping the user at `/`.
+
+Note new tabs already inherited before this, but by spawning in the home
+directory and then sending `cd … && clear`. That left the command in shell
+history and briefly showed the wrong directory. `PaneController(startingIn:)`
+now sets the directory on the node before `rebuild()`, so it reaches
+`startProcess(currentDirectory:)` at spawn time — verified by checking
+`CommandLog` contains no `cd` for a newly opened tab in any of the four modes.
+
 ### Titles
 
 Three levels, each showing what suits its width:

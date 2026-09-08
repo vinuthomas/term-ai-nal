@@ -81,6 +81,11 @@ struct AppSettings: Codable {
     var fontFamily: String = ""
     var theme: String = "default"
     var restoreSession: Bool = false
+    /// Where a new tab or split starts: `inherit` (the current pane's
+    /// directory), `home`, or `custom`.
+    var newPaneDirectory: String = "inherit"
+    /// Used only when `newPaneDirectory` is `custom`.
+    var newPaneCustomDirectory: String = ""
 
     // iTerm theme import (`parseItermTheme`) is dropped by decision, so the
     // `customTheme` / `customThemeName` keys are intentionally omitted. Built-in
@@ -135,6 +140,8 @@ struct AppSettings: Codable {
         fontFamily = try c.decodeIfPresent(String.self, forKey: .fontFamily) ?? d.fontFamily
         theme = try c.decodeIfPresent(String.self, forKey: .theme) ?? d.theme
         restoreSession = try c.decodeIfPresent(Bool.self, forKey: .restoreSession) ?? d.restoreSession
+        newPaneDirectory = try c.decodeIfPresent(String.self, forKey: .newPaneDirectory) ?? d.newPaneDirectory
+        newPaneCustomDirectory = try c.decodeIfPresent(String.self, forKey: .newPaneCustomDirectory) ?? d.newPaneCustomDirectory
         assistantEnabled = try c.decodeIfPresent(Bool.self, forKey: .assistantEnabled) ?? d.assistantEnabled
         assistantInsights = try c.decodeIfPresent(String.self, forKey: .assistantInsights) ?? d.assistantInsights
         assistantSidebarWidth = try c.decodeIfPresent(Double.self, forKey: .assistantSidebarWidth) ?? d.assistantSidebarWidth
