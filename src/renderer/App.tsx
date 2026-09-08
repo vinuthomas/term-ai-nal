@@ -20,6 +20,15 @@ declare global {
       saveSettings: (settings: any) => Promise<boolean>;
       askAI: (prompt: string) => Promise<string>;
       askAIPlan: (goal: string, cwd: string) => Promise<string>;
+      checkAppleIntelligence: () => Promise<{
+        available: boolean;
+        platform: string;
+        appleSilicon: boolean;
+        macOsMajor: number | null;
+        fmExists: boolean;
+        fmPath: string;
+        reason: string;
+      }>;
       openExternal: (url: string) => Promise<boolean>;
       parseItermTheme: (xmlContent: string) => Promise<any>;
       saveSession: (sessionData: any) => Promise<boolean>;

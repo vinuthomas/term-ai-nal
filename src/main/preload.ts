@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveSettings: (settings: any) => ipcRenderer.invoke('save-settings', settings),
   getOllamaModels: (baseUrl: string) => ipcRenderer.invoke('get-ollama-models', baseUrl),
   askAI: (prompt: string) => ipcRenderer.invoke('ask-ai', prompt),
+  askAIPlan: (goal: string, cwd: string) => ipcRenderer.invoke('ask-ai-plan', { goal, cwd }),
+  checkAppleIntelligence: () => ipcRenderer.invoke('check-apple-intelligence'),
 
   // Utilities
   openExternal: (url: string) => ipcRenderer.invoke('open-external', url),

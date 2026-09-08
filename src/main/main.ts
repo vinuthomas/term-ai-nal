@@ -4,7 +4,8 @@ import * as os from 'os';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as pty from 'node-pty';
-import { execFileSync } from 'child_process';
+import { execFileSync, execFile } from 'child_process';
+import { promisify } from 'util';
 import { XMLParser } from 'fast-xml-parser';
 
 // --- Settings Management (Simple FS based) ---
@@ -16,6 +17,7 @@ const defaultSettings = {
   apiKey: '',
   model: 'gpt-4o',
   baseUrl: '', // For Ollama or custom endpoints
+  appleModel: 'on-device', // 'on-device' (local 3B) or 'pcc' (Private Cloud Compute)
   fontSize: 14,
   fontFamily: '', // Empty = auto-detect Unicode-compatible font stack
   theme: 'default', // 'default', 'dracula', 'solarized-dark', 'one-dark', 'custom'
@@ -228,13 +230,95 @@ function parseItermTheme(xmlContent: string): any {
 
 // --- AI Service ---
 
+// --- Apple Intelligence (Foundation Models) ---
+// Reached by shelling out to the `fm` CLI that ships with macOS 27+. There is no
+// Node binding for the FoundationModels framework, and `fm` avoids needing a
+// Swift sidecar in the app bundle.
+const execFileAsync = promisify(execFile);
+const FM_CLI_PATH = '/usr/bin/fm';
+
+function detectAppleSilicon(): boolean {
+  if (os.platform() !== 'darwin') return false;
+  if (os.arch() === 'arm64') return true;
+  // Under Rosetta os.arch() reports 'x64', so ask the kernel directly.
+  try {
+    return execFileSync('sysctl', ['-n', 'hw.optional.arm64'], { encoding: 'utf-8' }).trim() === '1';
+  } catch (e) {
+    return false;
+  }
+}
+
+// Darwin 25 -> macOS 26 (Tahoe), Darwin 26 -> macOS 27, and so on.
+function getMacOsMajor(): number | null {
+  if (os.platform() !== 'darwin') return null;
+  const darwinMajor = parseInt(os.release().split('.')[0], 10);
+  if (isNaN(darwinMajor)) return null;
+  return darwinMajor >= 25 ? darwinMajor + 1 : darwinMajor - 9;
+}
+
+async function checkAppleIntelligence() {
+  const platform = os.platform();
+  const appleSilicon = detectAppleSilicon();
+  const macOsMajor = getMacOsMajor();
+  const fmExists = platform === 'darwin' && fs.existsSync(FM_CLI_PATH);
+
+  let available = false;
+  let reason = '';
+
+  if (platform !== 'darwin') {
+    reason = 'Apple Intelligence is only available on macOS.';
+  } else if (!appleSilicon) {
+    reason = 'Apple Intelligence requires Apple Silicon. This Mac reports an Intel CPU.';
+  } else if (!fmExists) {
+    reason = `The fm command line tool was not found at ${FM_CLI_PATH}. It ships with macOS 27 and later`
+      + (macOsMajor ? ` \u2014 this Mac is running macOS ${macOsMajor}.` : '.');
+  } else {
+    try {
+      await execFileAsync(FM_CLI_PATH, ['--help'], { timeout: 10000 });
+      available = true;
+      reason = 'Apple Intelligence CLI detected. The first request will confirm it is enabled in System Settings.';
+    } catch (e: any) {
+      reason = `Found ${FM_CLI_PATH} but it failed to run: ${e.message || 'unknown error'}`;
+    }
+  }
+
+  return { available, platform, appleSilicon, macOsMajor, fmExists, fmPath: FM_CLI_PATH, reason };
+}
+
+async function callAppleFm(systemPrompt: string, userPrompt: string, settings: any): Promise<string> {
+  if (!fs.existsSync(FM_CLI_PATH)) {
+    throw new Error('Apple fm CLI not found - requires macOS 27 or later');
+  }
+
+  const args = ['respond'];
+  if (settings.appleModel === 'pcc') args.push('--model', 'pcc');
+  // The fm CLI exposes no separate system-prompt flag, so fold instructions into the prompt.
+  // execFile does not use a shell, so the prompt needs no escaping.
+  args.push(`${systemPrompt}\n\nUser Request: ${userPrompt}`);
+
+  try {
+    const { stdout } = await execFileAsync(FM_CLI_PATH, args, {
+      timeout: 120000,
+      maxBuffer: 10 * 1024 * 1024,
+    });
+    const text = (stdout || '').trim();
+    if (!text) throw new Error('Apple fm returned an empty response');
+    return text;
+  } catch (e: any) {
+    const stderrLine = (e.stderr || '').toString().trim().split('\n')[0];
+    throw new Error(stderrLine || e.message || 'Apple fm request failed');
+  }
+}
+
 async function callAIRaw(systemPrompt: string, userPrompt: string, settings: any): Promise<string> {
   const { provider, apiKey, model, baseUrl } = settings;
   try {
     if (provider === 'openai' || provider === 'perplexity') {
+      // An explicit baseUrl lets the OpenAI path target any OpenAI-compatible
+      // server (e.g. a local Apple Foundation Models bridge) without a new provider.
       const url = provider === 'perplexity'
         ? 'https://api.perplexity.ai/chat/completions'
-        : 'https://api.openai.com/v1/chat/completions';
+        : (baseUrl || 'https://api.openai.com/v1/chat/completions');
       const response = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
@@ -284,6 +368,8 @@ async function callAIRaw(systemPrompt: string, userPrompt: string, settings: any
       const data: any = await response.json();
       if (!response.ok) throw new Error('Ollama Error');
       return data.message.content.trim();
+    } else if (provider === 'apple') {
+      return await callAppleFm(systemPrompt, userPrompt, settings);
     }
   } catch (error: any) {
     throw error;
@@ -646,6 +732,7 @@ function setupIpcHandlers() {
       return [];
     }
   });
+  ipcMain.handle('check-apple-intelligence', async () => await checkAppleIntelligence());
   ipcMain.handle('ask-ai', async (event, prompt) => {
     const settings = loadSettings();
     return await callAI(prompt, settings);

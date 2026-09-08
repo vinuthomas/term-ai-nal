@@ -12,6 +12,8 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
   const [model, setModel] = useState('');
   const [baseUrl, setBaseUrl] = useState('');
   const [ollamaModels, setOllamaModels] = useState<string[]>([]);
+  const [appleModel, setAppleModel] = useState('on-device');
+  const [appleStatus, setAppleStatus] = useState<any>(null);
   const [fontSize, setFontSize] = useState(14);
   const [fontFamily, setFontFamily] = useState('');
   const [theme, setTheme] = useState('default');
@@ -39,6 +41,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       setApiKey(s.apiKey || '');
       setModel(s.model || '');
       setBaseUrl(s.baseUrl || '');
+      setAppleModel(s.appleModel || 'on-device');
       setFontSize(s.fontSize || 14);
       setFontFamily(s.fontFamily || '');
       setTheme(s.theme || 'default');
@@ -64,6 +67,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
 
       if (s.provider === 'ollama') {
         fetchOllamaModels(s.baseUrl || 'http://localhost:11434');
+      }
+
+      // Always probe so the provider list can show whether Apple is usable here.
+      try {
+        setAppleStatus(await window.electronAPI.checkAppleIntelligence());
+      } catch (e) {
+        setAppleStatus(null);
       }
     };
     load();
@@ -98,6 +108,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
       apiKey,
       model,
       baseUrl,
+      appleModel,
       fontSize,
       fontFamily,
       theme,
@@ -123,6 +134,7 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
         case 'gemini': return 'gemini-1.5-flash';
         case 'perplexity': return 'llama-3.1-sonar-large-128k-online';
         case 'ollama': return 'llama3';
+        case 'apple': return 'system';
         default: return '';
     }
   }
@@ -183,10 +195,13 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
               <option value="gemini">Google Gemini</option>
               <option value="perplexity">Perplexity</option>
               <option value="ollama">Ollama (Local)</option>
+              <option value="apple">
+                Apple Intelligence (On-Device){appleStatus && !appleStatus.available ? ' \u2014 unavailable' : ''}
+              </option>
             </select>
           </div>
 
-          {provider !== 'ollama' && (
+          {provider !== 'ollama' && provider !== 'apple' && (
             <div style={styles.group}>
               <label style={styles.label}>API Key</label>
               <input 
@@ -199,6 +214,54 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
             </div>
           )}
 
+          {provider === 'apple' && (
+            <div style={styles.group}>
+              <label style={styles.label}>Apple Model</label>
+              <select
+                value={appleModel}
+                onChange={(e) => setAppleModel(e.target.value)}
+                style={styles.input}
+              >
+                <option value="on-device">On-Device (~3B, 8K context, fully local)</option>
+                <option value="pcc">Private Cloud Compute (32K context, reasoning)</option>
+              </select>
+              <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
+                {appleModel === 'pcc'
+                  ? 'Runs on Apple\u2019s private servers, not on this Mac. No API key required.'
+                  : 'Runs entirely on this Mac. No API key, no network, no cost.'}
+              </small>
+
+              <div
+                style={{
+                  marginTop: '10px',
+                  padding: '10px',
+                  borderRadius: '6px',
+                  fontSize: '12px',
+                  lineHeight: 1.5,
+                  background: appleStatus?.available ? '#16301d' : '#3a2018',
+                  color: appleStatus?.available ? '#7ee2a8' : '#ffb08c',
+                }}
+              >
+                {!appleStatus ? (
+                  'Checking Apple Intelligence support\u2026'
+                ) : (
+                  <>
+                    <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+                      {appleStatus.available ? 'Available' : 'Not available on this Mac'}
+                    </div>
+                    <div>{appleStatus.reason}</div>
+                    <div style={{ marginTop: '6px', opacity: 0.8 }}>
+                      Apple Silicon: {appleStatus.appleSilicon ? 'yes' : 'no'}
+                      {' \u00b7 '}macOS: {appleStatus.macOsMajor ?? 'unknown'}
+                      {' \u00b7 '}fm CLI: {appleStatus.fmExists ? appleStatus.fmPath : 'not found'}
+                    </div>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+
+          {provider !== 'apple' && (
           <div style={styles.group}>
             <label style={styles.label}>Model Name</label>
             {provider === 'ollama' && ollamaModels.length > 0 ? (
@@ -227,20 +290,31 @@ const Settings: React.FC<SettingsProps> = ({ onClose }) => {
                   : `Leave empty for default: ${getPlaceholderModel()}`}
              </small>
           </div>
+          )}
 
-          {provider === 'ollama' && (
+          {(provider === 'ollama' || provider === 'openai') && (
             <div style={styles.group}>
-              <label style={styles.label}>Base URL</label>
+              <label style={styles.label}>
+                Base URL {provider === 'openai' ? '(optional)' : ''}
+              </label>
               <input 
                 type="text" 
                 value={baseUrl} 
                 onChange={(e) => {
                   setBaseUrl(e.target.value);
-                  fetchOllamaModels(e.target.value);
+                  if (provider === 'ollama') fetchOllamaModels(e.target.value);
                 }} 
                 style={styles.input} 
-                placeholder="http://localhost:11434"
+                placeholder={provider === 'openai'
+                  ? 'https://api.openai.com/v1/chat/completions'
+                  : 'http://localhost:11434'}
               />
+              {provider === 'openai' && (
+                <small style={{ color: '#666', marginTop: '5px', display: 'block' }}>
+                  Point this at any OpenAI-compatible endpoint \u2014 including a local
+                  Apple Foundation Models bridge \u2014 to use it instead of OpenAI.
+                </small>
+              )}
             </div>
           )}
 
