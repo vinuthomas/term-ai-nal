@@ -298,9 +298,11 @@ Do not assume these work; `docs/MIGRATION.md` is the authoritative list.
   work, just a new consumer.
 - **iTerm theme import is dropped by decision.** Four built-ins only;
   `customTheme`/`customThemeName` are deliberately absent from `AppSettings`.
-- Signing, notarization and DMG packaging do not exist yet — `make-app.sh` ad-hoc signs.
-  A real build needs a Developer ID, hardened-runtime entitlements (but *not* the sandbox),
-  and `notarytool`.
+- **No real signing or notarization yet.** `Scripts/make-dmg.sh` packages `make-app.sh`'s
+  output (app + `/Applications` symlink) into a DMG, but the app inside is only ad-hoc signed
+  (`make-app.sh`'s `codesign --sign -`), so Gatekeeper warns "unidentified developer" on
+  another Mac. A real release needs a Developer ID, hardened-runtime entitlements (but *not*
+  the sandbox), and `notarytool` — none of which exist on this machine.
 
 ## Release Process
 
