@@ -136,9 +136,17 @@ by `settings.mcpFeatures`. Panes are exposed across *every* tab, not just the vi
 shell in a background tab is live and an agent may be driving it. Every tool branch returns
 human-readable text, errors included, so clients never special-case failure.
 
-Every request needs `Authorization: Bearer <SettingsStore.mcpAuthToken>` — a random token
-generated on first access and kept in the keychain, checked in `route()` before any handler
-runs. Responses carry no `Access-Control-Allow-*` headers at all, on purpose: earlier builds
+Every request needs `Authorization: Bearer <token>`, checked in `route()` before any handler
+runs. `restartMcpServer()` passes `SettingsStore.effectiveMcpAuthToken`, *not*
+`.mcpAuthToken` directly — the latter provisions a real token in the keychain, which can
+prompt for the login password the first time a given code identity or install path reads it
+back. Doing that unconditionally at launch meant every user got an OS keychain prompt on
+first run whether or not they ever touched MCP. `effectiveMcpAuthToken` instead returns a
+per-launch random value that never touches the keychain until a token has actually been
+provisioned — which only happens by opening the MCP Settings tab (`mcpAuthToken` there,
+via `syncFromDraft`), the only place the token's value is ever exposed, so nothing can
+configure an external client without hitting that path first. Responses carry no
+`Access-Control-Allow-*` headers at all, on purpose: earlier builds
 sent a wildcard `Access-Control-Allow-Origin: *`, which combined with no authentication meant
 any JavaScript running in any browser tab on the machine could call `send_input_to_terminal`
 with zero interaction from the user — an MCP client is a local agent process, never a browser,

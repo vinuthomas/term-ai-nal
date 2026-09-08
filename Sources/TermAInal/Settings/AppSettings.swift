@@ -111,7 +111,10 @@ struct AppSettings: Codable {
     var assistantInsights: String = "failures"
     var assistantSidebarWidth: Double = 340
 
-    var mcpEnabled: Bool = true
+    /// Off by default — letting an external agent list panes, read terminal
+    /// output, and send input is a deliberate opt-in, not something a user
+    /// gets just by installing the app. Turned on from the MCP Settings tab.
+    var mcpEnabled: Bool = false
     var mcpPort: Int = 57320
     /// Per-terminal in-memory buffer size; overflow spills to a temp file.
     var mcpBufferSizeKB: Int = 500
@@ -291,6 +294,7 @@ final class SettingsStore {
     /// client's config does not go stale every restart.
     var mcpAuthToken: String {
         if let existing = KeychainStore.get(account: "mcpAuthToken"), !existing.isEmpty {
+            markMcpAuthTokenProvisioned()
             return existing
         }
         return regenerateMcpAuthToken()
@@ -304,7 +308,45 @@ final class SettingsStore {
     func regenerateMcpAuthToken() -> String {
         let token = Self.randomToken()
         KeychainStore.set(token, account: "mcpAuthToken")
+        markMcpAuthTokenProvisioned()
         return token
+    }
+
+    private static let mcpAuthTokenProvisionedKey = "mcpAuthTokenProvisioned"
+
+    /// Whether a real token has ever been provisioned — checked through
+    /// `UserDefaults`, never the keychain, so checking it can never itself
+    /// trigger an access prompt.
+    private var hasProvisionedMcpAuthToken: Bool {
+        UserDefaults.standard.bool(forKey: Self.mcpAuthTokenProvisionedKey)
+    }
+
+    private func markMcpAuthTokenProvisioned() {
+        UserDefaults.standard.set(true, forKey: Self.mcpAuthTokenProvisionedKey)
+    }
+
+    /// One random value per process launch, generated locally and never
+    /// written anywhere — used as the MCP server's auth requirement until a
+    /// real token is provisioned. `mcpAuthToken` regenerating this on every
+    /// call would make the server reject its own previously issued value
+    /// mid-session, so it is computed once and cached.
+    private static let ephemeralMcpAuthToken = randomToken()
+
+    /// What the MCP server should actually require right now. Touches the
+    /// keychain — and so can prompt for the login password to authorize
+    /// access — only if a token has already been provisioned; otherwise this
+    /// is a per-launch value that never touches the keychain at all.
+    ///
+    /// This is deliberately *not* what `restartMcpServer` used to call
+    /// directly: that read the persisted token unconditionally at every
+    /// launch, so every user got an OS keychain prompt on first run whether
+    /// or not they ever touched MCP. The token's value is only ever exposed
+    /// through the MCP Settings tab — nothing can configure an external
+    /// client without opening it first — so that tab populating its token
+    /// field (via `mcpAuthToken` above) is what promotes this from ephemeral
+    /// to persisted, and prompts only for someone who actually got there.
+    var effectiveMcpAuthToken: String {
+        hasProvisionedMcpAuthToken ? mcpAuthToken : Self.ephemeralMcpAuthToken
     }
 
     private static func randomToken(bytes: Int = 32) -> String {

@@ -118,7 +118,8 @@ against its real API (no keys have been used).
 - **New-shell directory.** `newPaneDirectory` is `inherit` (default), `home` or
   `custom`; it covers both new tabs and new panes, set at spawn time rather
   than by sending a `cd`.
-- **MCP server**, on by default — see below.
+- **MCP server**, off by default — an external agent driving your terminal is an opt-in, not
+  something you get just by installing the app. Turn it on from Settings → MCP. See below.
 
 Panes start a `zsh --login` shell with a **freshly constructed environment**,
 not the launching process's. Nothing is inherited except `SSH_AUTH_SOCK`;
