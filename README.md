@@ -134,7 +134,14 @@ All six providers work: **`apple`** (FoundationModels, on-device),
 
 `anthropic`, `openai`, `gemini` and `ollama` also accept a **Base URL**
 override, for a proxy or gateway. Perplexity's endpoint is fixed and Apple has
-none.
+none. Note the override means different things by necessity: for OpenAI and
+Anthropic it is the complete endpoint, while for Gemini it is a host prefix,
+because Gemini puts the model in the URL path and treating an override as the
+whole URL would silently discard your model setting.
+
+Model defaults, both overridable in Settings: `claude-sonnet-5` and
+`gemini-2.5-flash`. Sonnet rather than Opus because generating a one-line shell
+command is a small task and interactive latency matters.
 
 Anthropic uses `output_config.format` with a JSON schema — not a forced
 `tool_choice`, which current models reject with a 400, and not an assistant

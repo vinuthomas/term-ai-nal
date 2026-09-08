@@ -330,6 +330,21 @@ the wrong thing; the Gemini reply splits its JSON across two `parts`, so taking
 `parts[0]` yields truncated JSON. Both were caught this way rather than in
 production.
 
+`--check-cloud` deliberately sends an **empty** model, so what it verifies is
+each provider's *default* — the value a new user actually gets. It originally
+passed an explicit `"mock-model"`, which meant the defaults were the one thing
+it never touched.
+
+Defaults: `claude-sonnet-5` and `gemini-2.5-flash`, both overridable. Sonnet
+rather than Opus because a one-line shell command is a small task and in an
+interactive terminal latency is part of correctness.
+
+One asymmetry worth knowing: a `baseUrl` override is the complete endpoint for
+OpenAI and Anthropic, but a host *prefix* for Gemini. Gemini puts the model in
+the URL path, so treating an override as the whole URL made it silently discard
+the user's model setting — point the app at a gateway and your model choice
+quietly stopped applying.
+
 Still unverified: every cloud provider against its real API, and the model IDs
 in their defaults.
 

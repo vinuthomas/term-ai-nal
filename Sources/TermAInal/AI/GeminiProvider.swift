@@ -153,12 +153,15 @@ struct GeminiProvider: AIProvider {
     }
 
     private func endpoint() throws -> URL {
-        // An explicit baseUrl points the provider at a proxy or gateway — and
-        // at a local mock, which is the only way to exercise this path here.
+        // `baseUrl` is a host prefix here, not a whole URL — unlike the OpenAI
+        // provider, where the whole endpoint is one path. Gemini puts the model
+        // *in* the path, so treating an override as the complete URL would make
+        // it silently discard the user's model setting: point the app at a
+        // gateway and your choice of model quietly stops applying.
         let base = settings.baseUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        let string = base.isEmpty
-            ? "https://generativelanguage.googleapis.com/v1beta/models/\(resolvedModel):generateContent"
-            : base
+        let host = (base.isEmpty ? "https://generativelanguage.googleapis.com" : base)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        let string = "\(host)/v1beta/models/\(resolvedModel):generateContent"
         guard let url = URL(string: string) else {
             throw AIError.notConfigured("Invalid endpoint URL: \(string)")
         }
@@ -169,6 +172,8 @@ struct GeminiProvider: AIProvider {
     /// API from this machine — no Gemini key was available to check the ID.
     private var resolvedModel: String {
         let model = settings.model.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A default the user overrides in Settings; not verified against a
+        // live API from this machine.
         return model.isEmpty ? "gemini-2.5-flash" : model
     }
 }

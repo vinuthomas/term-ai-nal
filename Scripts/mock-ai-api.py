@@ -38,8 +38,10 @@ class Handler(BaseHTTPRequestHandler):
         else:
             flavour = None
 
-        print(f"\n--- {flavour or 'UNRECOGNISED AUTH'}  {self.path}")
-        print(json.dumps(body, indent=2)[:1200])
+        # Flushed: this is normally run in the background, and buffered output
+        # is lost entirely when the process is killed.
+        print(f"\n--- {flavour or 'UNRECOGNISED AUTH'}  {self.path}", flush=True)
+        print(json.dumps(body, indent=2)[:1200], flush=True)
 
         payload = json.dumps({"command": "ls -lhS", "explanation": "List files by size"})
         if flavour == "anthropic":
@@ -69,5 +71,5 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"mock AI API on http://127.0.0.1:{PORT} — Ctrl+C to stop")
+    print(f"mock AI API on http://127.0.0.1:{PORT} — Ctrl+C to stop", flush=True)
     HTTPServer(("127.0.0.1", PORT), Handler).serve_forever()

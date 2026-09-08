@@ -14,9 +14,11 @@ struct AnthropicProvider: AIProvider {
 
     /// A default the user overrides in Settings.
     ///
-    /// Not downgraded for cost: which model to pay for is the user's call, and
-    /// a wrong shell flag is more expensive than a few tokens.
-    private static let defaultModel = "claude-opus-5"
+    /// Sonnet rather than Opus by the repo owner's decision: generating a
+    /// one-line shell command is a small task, and in an interactive terminal
+    /// latency is part of correctness. Raise it in Settings for harder asks —
+    /// which model to pay for is the user's call, not this file's.
+    private static let defaultModel = "claude-sonnet-5"
 
     /// `max_tokens` is a ceiling, not a reservation — unused headroom costs
     /// nothing — so it is set well clear of anything the schemas can produce

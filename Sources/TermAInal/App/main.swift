@@ -136,7 +136,9 @@ if CommandLine.arguments.contains("--check-cloud") {
         SettingsStore.shared.setApiKey("mock-key-not-real", for: provider)
         defer { SettingsStore.shared.setApiKey(existing, for: provider) }
 
-        let profile = AIProfile(provider: provider, model: "mock-model", baseUrl: mock)
+        // Empty model on purpose: this exercises each provider's *default*,
+        // which is the value a new user actually gets.
+        let profile = AIProfile(provider: provider, model: "", baseUrl: mock)
         guard let impl = AIService.provider(for: profile) else { print("\(provider): no provider"); continue }
         let sem = DispatchSemaphore(value: 0)
         Task {
