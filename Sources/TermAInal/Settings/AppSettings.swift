@@ -69,8 +69,8 @@ struct AIProfile: Codable, Equatable {
 /// `apiKey` is absent by design: it moves out of the settings file and into the
 /// keychain (see `KeychainStore`), replacing Electron's `safeStorage` hex blob.
 struct AppSettings: Codable {
-    /// Generating shell commands: the palette (Cmd+Shift+P) and the task
-    /// planner (Cmd+Shift+M). Accuracy of syntax matters most here.
+    /// Generating shell commands, via the command palette (Cmd+Shift+P).
+    /// Accuracy of shell syntax matters most here.
     var commandProfile: AIProfile = AIProfile()
     /// The assistant sidebar's insights and questions. Explanation quality and
     /// low cost matter more than command syntax.
@@ -168,13 +168,15 @@ final class SettingsStore {
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
     }
 
-    /// Deliberately *not* `term-ai-nal/`.
+    /// Deliberately *not* `term-ai-nal/`, and **do not rename it now that
+    /// Electron is gone** — it holds live user settings, so renaming resets
+    /// everyone silently.
     ///
-    /// That directory is the live Electron app's `userData`, holding its own
-    /// `settings.json` and `session.json`. `save()` writes only the keys this
-    /// struct knows about, so sharing the file would silently strip `apiKey`,
-    /// `customTheme` and `customThemeName` and break the shipping app. The two
-    /// stay separate until Electron is retired.
+    /// `term-ai-nal/` was the Electron app's `userData`, holding its own
+    /// `settings.json` and `session.json`. Because `save()` writes only the
+    /// keys this struct knows about, sharing the file would have stripped
+    /// `apiKey`, `customTheme` and `customThemeName` from the app that was
+    /// still shipping. `load()` still reads it once as an import source.
     var settingsURL: URL {
         let dir = supportDirectory.appendingPathComponent("term-ai-nal-native", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)

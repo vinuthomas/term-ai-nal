@@ -31,11 +31,10 @@ if [ -d Resources/Fonts ]; then
 fi
 
 # --- App icon ---
-# The repo ships build/icon.png (1024x1024) plus an icon.icns that contains
-# only a single 1024pt representation, which the Dock renders poorly. Generate
-# a full iconset from the PNG instead, cached and only rebuilt when the source
-# changes. electron-builder did this step for the Electron target.
-ICON_SRC="../build/icon.png"
+# Generates a full iconset from Resources/AppIcon.png (1024x1024), cached and
+# rebuilt only when the source changes. electron-builder used to do this step;
+# nothing does it now, so the bundle would otherwise get the generic icon.
+ICON_SRC="Resources/AppIcon.png"
 ICON_OUT="build/AppIcon.icns"
 if [ -f "$ICON_SRC" ]; then
     if [ ! -f "$ICON_OUT" ] || [ "$ICON_SRC" -nt "$ICON_OUT" ]; then

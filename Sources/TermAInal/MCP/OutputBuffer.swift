@@ -102,9 +102,10 @@ final class OutputBuffer {
 /// The OSC branch below is matched first because it must consume up to its own
 /// BEL or ST terminator.
 ///
-/// Note for later: OSC 133 marks command start/end and exit status. Stripping
-/// it is right for now, but parsing it is how this buffer would gain real
-/// per-command boundaries instead of a flat byte stream.
+/// Stripping OSC 133 is right *here*: this buffer is deliberately a flat byte
+/// stream for MCP reads. `CommandLog` parses those same marks off the same tap
+/// to get per-command records, so the structure exists alongside rather than
+/// inside this.
 enum ANSIStripper {
     private static let pattern = try! NSRegularExpression(
         pattern: "\u{1b}\\][^\u{07}\u{1b}]*(?:\u{07}|\u{1b}\\\\)"

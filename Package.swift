@@ -14,8 +14,10 @@ let package = Package(
                 .product(name: "SwiftTerm", package: "SwiftTerm"),
             ],
             path: "Sources/TermAInal",
-            // Migration scaffold still uses Swift 5 semantics; tightening to strict
-            // concurrency is tracked in MIGRATION.md.
+            // Swift 5 semantics: the tree has not been audited for Swift 6
+            // strict concurrency. PaneController and AppDelegate are
+            // main-actor by convention rather than declaration — see
+            // docs/MIGRATION.md, Phase 4.
             swiftSettings: [.swiftLanguageMode(.v5)]
         ),
     ]

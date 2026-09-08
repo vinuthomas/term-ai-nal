@@ -414,7 +414,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     private func buildAITab() -> NSView {
         commandEditor = AIProfileEditor(
             title: "Commands",
-            hint: "Used by the AI palette and the task planner. Pick the model whose shell syntax you trust most — a wrong flag is worse than a slow answer.",
+            hint: "Used by the command palette. Pick the model whose shell syntax you trust most — a wrong flag is worse than a slow answer.",
             keys: apiKeys
         )
         insightEditor = AIProfileEditor(

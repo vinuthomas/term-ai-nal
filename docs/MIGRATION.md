@@ -1,12 +1,20 @@
 # Electron → native Swift migration
 
-Status of the `swift-migration` branch. The Electron app in `src/` is untouched
-and still the shipping build; everything native lives under `native/`.
+**The migration is complete.** The Electron app has been retired and deleted;
+the tag `electron-final` preserves its last state, recoverable with:
+
+```bash
+git checkout electron-final -- src package.json vite.config.ts tsconfig.json
+```
+
+The Swift package now sits at the repo root. This document is kept as the record
+of how the port was done, what was deliberately dropped, and — most usefully —
+the bugs that were shipped along the way and the disciplines that came out of
+them. `CLAUDE.md` carries the rules; this is the reasoning behind them.
 
 ## Build
 
 ```bash
-cd native
 ./Scripts/make-app.sh          # debug build + .app bundle
 ./Scripts/make-app.sh release  # release build
 open build/TermAInal.app
@@ -14,20 +22,38 @@ open build/TermAInal.app
 ./build/TermAInal.app/Contents/MacOS/TermAInal
 ```
 
-There is no `.xcodeproj`. This builds with **Command Line Tools only** — the
-package is plain SPM, and `Scripts/make-app.sh` hand-assembles the `.app` with
-an `Info.plist` because SPM emits a bare executable and AppKit needs a real
-bundle for its menu bar, window activation and Keychain identity.
-`swift build` alone is enough to typecheck. Opening `native/Package.swift` in
-Xcode also works if you install it.
+**Xcode is required**, even though the build is a CLI one: the `@Generable`
+macro the Apple provider uses is expanded by `FoundationModelsMacros`, which
+ships with Xcode and not with the Command Line Tools, so `xcode-select -p` must
+point at `Xcode.app`. (This started as a CLT-only build; see Known constraints.)
+
+The package is plain SPM and `Scripts/make-app.sh` hand-assembles the `.app`
+with an `Info.plist`, because SPM emits a bare executable and AppKit needs a
+real bundle for its menu bar, window activation and Keychain identity.
+`swift build` alone typechecks. There is no `.xcodeproj`; Xcode opens
+`Package.swift` directly.
 
 The app is deliberately **not sandboxed** — SwiftTerm's child shell needs full
 filesystem access.
 
+There is no test suite. Five flags on the built binary stand in for one, and
+each exists because a specific bug shipped:
+
+| flag | guards against |
+|---|---|
+| `--check-ai` | a provider profile that cannot answer; exercises both roles |
+| `--check-contrast` | derived theme colours falling below their contrast floors |
+| `--check-titlebar` | a titlebar accessory sized from Auto Layout, which renders at zero width |
+| `--check-locale` | the on-device model's locale support and the token cost of a real context |
+| `--check-ctrld` | the pane → tab → window teardown chain leaving dead UI |
+
+A running instance holds port 57320. A stale one has previously made a fixed
+bug look unfixed, so check for it before concluding anything from a probe.
+
 `make-app.sh` also generates the app icon, because nothing else does it now:
 electron-builder handled that for the Electron target, and the hand-assembled
 bundle initially had no `CFBundleIconFile` at all, so the Dock showed the
-generic placeholder. It builds a full iconset from `build/icon.png` with `sips`
+generic placeholder. It builds a full iconset from `Resources/AppIcon.png` with `sips`
 and `iconutil` rather than reusing the repo's `build/icon.icns`, which contains
 only a single 1024pt representation. The bundle is `touch`ed afterwards, since
 the Dock and Finder cache icons per bundle path and a rebuild in place otherwise
@@ -564,7 +590,7 @@ configuration:
 
 | profile | used by | what matters |
 |---|---|---|
-| `commandProfile` | palette (Cmd+Shift+P), task planner (Cmd+Shift+M) | correct shell syntax |
+| `commandProfile` | command palette (Cmd+Shift+P) | correct shell syntax |
 | `insightProfile` | assistant sidebar insights and questions | explanation quality, low cost |
 
 The split is measured, not speculative. On the same failing `ls`, Apple's
@@ -665,18 +691,17 @@ than a nicer Electron app. Everything here is new capability, not a port.
   file (but *not* the sandbox — the child shell needs full access), and
   `notarytool`.
 - **Updates.** Sparkle, or whatever replaces the current GitHub-release flow.
-- **Retire `src/`** once Phase 1 holds. There is no cross-platform reason to
-  keep it: the Windows and Linux packaging targets have been removed from
-  `package.json`, so Electron has no remaining role once the native app is
-  dogfoodable.
+- ~~**Retire `src/`**~~ — **done.** Electron is deleted; `electron-final` tags
+  its last state. The Windows and Linux packaging targets had already been
+  removed, so it had no remaining role.
 
 ### Decisions taken
 
 1. **Xcode: install it.** Once present, `AppleSchemas`' runtime
    `DynamicGenerationSchema` construction collapses into two `@Generable`
    structs, and Instruments becomes available for the latency work in Phase 3.
-   The SPM layout stays as-is — Xcode opens `native/Package.swift` directly, so
-   no `.xcodeproj` is needed and the CLI build keeps working.
+   The SPM layout stays as-is — Xcode opens `Package.swift` directly, so no
+   `.xcodeproj` is needed and the CLI build keeps working.
 2. **Windows and Linux: dropped.** The `win`, `linux` and `nsis` electron-builder
    targets and the `dist:win`/`dist:linux`/`dist:all` scripts are removed;
    `dist` now builds macOS only. Native Swift is therefore the right target, and

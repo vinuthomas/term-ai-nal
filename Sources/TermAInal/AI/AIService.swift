@@ -25,9 +25,14 @@ protocol AIProvider {
     func suggestCommand(request: String, cwd: String?) async throws -> CommandSuggestion
     func plan(goal: String, cwd: String) async throws -> [PlanStep]
 
-    /// Free-form prose, for the assistant sidebar. Deliberately unstructured:
-    /// unlike the two above there is no shape to enforce, and forcing a schema
-    /// on an explanation only makes it worse.
+    /// Prose, for the assistant sidebar.
+    ///
+    /// Schema-constrained like the other two, despite carrying only one field.
+    /// It started unconstrained on the reasoning that an explanation has no
+    /// shape worth enforcing, and that was wrong: asked for two sentences,
+    /// qwen3:4b returned eleven paragraphs of chain-of-thought. The schema
+    /// bounds the reply; `ReplyCleaner` catches the `<think>` tag variants that
+    /// land *inside* the field where a schema cannot reach them.
     func answer(question: String, context: String) async throws -> String
 }
 
