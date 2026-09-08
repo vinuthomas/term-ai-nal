@@ -1,17 +1,31 @@
 # term-ai-nal
 
 An AI-assisted terminal emulator for macOS. Native Swift and AppKit, built on
-[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), with an AI command
-palette, an assistant sidebar, and a built-in MCP server so external agents can
-read and drive its panes.
-
-**A generated command is never executed on your behalf.** Generation only fills
-in a review sheet; nothing reaches the shell until you press Execute.
+[SwiftTerm](https://github.com/migueldeicaza/SwiftTerm), with an assistant
+sidebar and a built-in MCP server so external agents can read and drive its
+panes.
 
 macOS only. The app was an Electron/React/xterm.js project until v2; that
 version is retired and deleted, preserved at the tag `electron-final`. See
 [`docs/MIGRATION.md`](docs/MIGRATION.md) for the history and the current
 port status.
+
+## Install
+
+Download the DMG from the [latest release](https://github.com/vinuthomas/term-ai-nal/releases/latest),
+open it, and drag `TermAInal.app` into `Applications`.
+
+**The app is ad-hoc signed only — it is not notarized.** There is no Developer
+ID or `notarytool` step yet (see Known constraints), so opening it the normal
+way shows Gatekeeper's "Apple could not verify this app is free of malware"
+and refuses to launch it. Work around it either way:
+
+- Right-click (or Control-click) `TermAInal.app` in Finder, choose **Open**,
+  then confirm **Open** again in the dialog — this only needs to happen once.
+- Or strip the quarantine flag from a terminal: `xattr -cr /Applications/TermAInal.app`.
+
+Building from source (below) doesn't hit this: a locally built `.app` isn't
+quarantined, so Gatekeeper never intervenes.
 
 ## Requirements
 
@@ -96,9 +110,6 @@ against its real API (no keys have been used), and image paste rendering.
   duration, output) and comments on them *after* execution, plus free-form Q&A
   with the last few commands as context. `assistantInsights` is `off`,
   `failures` (default) or `all`.
-- **Command palette** (`Cmd+Shift+P`, or the AI menu). One entry point
-  with no mode: it always asks the model for a plan and renders a one-step plan
-  as a single command, so the model decides how many commands a request needs.
 - **Themes.** Four built-ins (`default`, `dracula`, `solarized-dark`,
   `one-dark`). The Electron iTerm `.itermcolors` importer was dropped by
   decision.
@@ -126,7 +137,7 @@ setting:
 
 | Profile | Used by | What matters |
 |---|---|---|
-| `commandProfile` | The command palette | Correct shell syntax |
+| `commandProfile` | Nothing currently — its UI (the command palette) was removed as unused; the provider plumbing and settings are kept for a future consumer | Correct shell syntax |
 | `insightProfile` | Assistant insights and Q&A | Explanation quality, low cost |
 
 The split is measured, not speculative. On the same failing command, Apple's
@@ -192,7 +203,6 @@ gained `Alt`.
 | `Cmd+Alt+1`–`Cmd+Alt+9` | Focus pane 1–9 |
 | `Cmd+K` | Clear screen and scrollback |
 | `Cmd+L` | Clear screen |
-| `Cmd+Shift+P` | Command palette |
 | `Cmd+Shift+A` | Toggle assistant sidebar |
 | `Cmd+H` / `Cmd+Q` | Hide / quit |
 
@@ -271,8 +281,9 @@ read it before distributing a build.
 - The target pins `swiftLanguageMode(.v5)`. Swift 6 strict concurrency has not
   been audited; `PaneController` and `AppDelegate` are main-actor by convention,
   not annotation.
-- `make-app.sh` ad-hoc signs. There is no Developer ID signing, notarization or
-  DMG step yet.
+- `make-app.sh` ad-hoc signs and `Scripts/make-dmg.sh` packages a DMG from it,
+  but there is no Developer ID signing or notarization — see Install above for
+  the Gatekeeper workaround a downloaded DMG needs.
 - Not ported from the Electron build: pane labels have no rename affordance
   (`PaneNode.label` is plumbed to MCP but nothing sets it), MCP hidden panes,
   follow-up refinement of a generated command, and the iTerm theme importer
