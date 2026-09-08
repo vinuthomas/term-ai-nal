@@ -52,6 +52,25 @@ only the Execute button writes to the shell.
   `tools/call` all respond.
 - Full round trip: `send_input_to_terminal` → shell executes →
   `get_terminal_output` returns the result as clean text.
+- Settings window constructs with all three tabs; themes and fonts apply to
+  live panes on Save.
+- **Ollama end to end**: model discovery via `/api/tags`, plus `suggestCommand`
+  and `plan` both returning correct output with `qwen2.5-coder:14b`.
+- Apple Intelligence availability probe reports correctly (currently
+  `appleIntelligenceNotEnabled` on this machine).
+
+Run `TermAInal --check-ai` for a headless check of the configured provider —
+it prints the settings path, availability, discovered Ollama models, and
+exercises both AI entry points. The AI layer is otherwise only reachable by
+driving the UI.
+
+### Not verified
+- **Apple Intelligence inference.** Blocked on it being turned on in System
+  Settings, not on code. The framework links, the schema builds and the
+  availability probe works; the `DynamicGenerationSchema` round-trip itself is
+  still unproven and remains the least-certain code in the tree.
+- **OpenAI / Perplexity.** Need a real key. The `response_format` JSON-schema
+  branch for OpenAI is written but unexercised.
 
 ## Improvements over the Electron build
 
@@ -71,7 +90,26 @@ These were fixed during the port rather than carried across:
    OSC too.
 4. **API key never touches disk in app storage.** It lives in the Keychain
    rather than as a `safeStorage` blob inside `settings.json`.
-5. **JSON-RPC id fidelity.** A bug found during the port: `JSONSerialization`
+5. **Schema-constrained output for Ollama and OpenAI too.** Concrete evidence
+   this was needed: asked in prose for no backticks, a 1.5B model returned
+   `` `ls -u | sort -u` `` — markdown inside the command, exactly the breakage
+   the Electron parser lived with. Ollama's `format` field and OpenAI's
+   `response_format` now carry a JSON schema, so every provider except
+   Perplexity gets a guaranteed shape. The prose parser stays as a fallback,
+   since a schema is a strong constraint rather than a proof and some servers
+   ignore the field.
+
+   Worth knowing: the schema fixed the *format* but not the *content*. The same
+   1.5B model then produced `ls -lz`, an invented flag; `qwen2.5-coder:14b`
+   produced `ls -lhS`. Schema fixes shape, model choice fixes correctness.
+6. **Native settings are isolated from the Electron app's.** The native store
+   originally resolved to `~/Library/Application Support/term-ai-nal/`, which is
+   the *live Electron userData directory*. Because `save()` writes only the keys
+   `AppSettings` knows about, saving from the native UI would have silently
+   stripped `apiKey`, `customTheme` and `customThemeName` from the shipping
+   app's config. The native app now uses `term-ai-nal-native/` and imports the
+   Electron file once, read-only, on first run.
+7. **JSON-RPC id fidelity.** A bug found during the port: `JSONSerialization`
    returns `NSNumber` for JSON numbers and `as Bool` matches any `NSNumber`
    through ObjC bridging, so the id `1` came back as `true`. Fixed by checking
    `CFBooleanGetTypeID` first. Worth checking whether the TS side has an
@@ -135,12 +173,13 @@ justify a native app at all.
 
 ### Phase 1 — Dogfoodable (the gate)
 
-Nothing else matters until you can use this instead of the Electron build. In
-rough dependency order:
+**Items 1-4 are done.** Remaining: 5 (session restore) and 6 (image paste).
 
-1. **Settings UI** — `Settings/SettingsWindow.swift`. Highest value, because it
-   unblocks *testing the AI paths at all*: with no way to pick a provider or
-   store a key, `AIService` is unreachable. Needs provider picker, Apple
+In rough dependency order:
+
+1. **Settings UI** — done, `Settings/SettingsWindowController.swift`. Only
+   working providers are listed; Anthropic and Gemini are omitted rather than
+   offered as dead ends. This unblocked testing the AI paths at all. Needs provider picker, Apple
    on-device/PCC switch, the Apple Intelligence availability panel (port the
    diagnostics from the Electron `Settings.tsx`), key field writing to
    `KeychainStore`, font, theme, and the MCP section. An `NSTabViewController`
@@ -150,18 +189,17 @@ rough dependency order:
    (`GET {baseUrl}/api/tags`) so the model field becomes a populated dropdown
    when Ollama is the provider, as it was in `Settings.tsx`. The inference path
    itself is already done.
-2. **Verify the AI paths end to end.** Currently unproven. Order: Apple
-   on-device (no key needed) → OpenAI-compatible against a local endpoint →
-   a real cloud key. Confirm `DynamicGenerationSchema` actually round-trips —
-   the array-of-references schema in `AppleSchemas.plan` is the least certain
-   code in the tree.
-3. **Apply font settings** — `fontSize`/`fontFamily` are parsed and ignored.
-   `TerminalView` takes an `NSFont`; wire it through `TerminalPaneView.init` and
-   re-apply on settings change. Small, but it is the first thing you will notice.
-4. **Themes, minus the importer** — port the four palettes from `themes.ts` into
-   a Swift `TerminalTheme` struct and apply via SwiftTerm's colour API.
-   `parseItermTheme` is **dropped by decision** — `.itermcolors` import will not
-   be ported, and `customTheme`/`customThemeName` stay out of `AppSettings`.
+2. **Verify the AI paths end to end.** Done for Ollama; blocked for Apple
+   (not enabled in System Settings) and cloud (no key). See "Not verified"
+   above — `AppleSchemas.plan`'s array-of-references schema is still the least
+   certain code in the tree.
+3. **Apply font settings** — done. `TerminalPaneView.applyAppearance` sets the
+   font, falling back to the system monospaced font when the family is blank or
+   unresolvable.
+4. **Themes, minus the importer** — done. Four built-ins ported to
+   `TerminalThemes` and applied via `installColors` plus
+   foreground/background/caret/selection. `parseItermTheme` is **dropped by
+   decision**; `customTheme`/`customThemeName` stay out of `AppSettings`.
 5. **Session restore** — `session.json`, layout + cwd persistence, and the
    `before-quit` cwd refresh. `PaneNode` is already tree-shaped and
    `ProcessCwd.lookup` already works, so this is mostly `Codable` on the tree

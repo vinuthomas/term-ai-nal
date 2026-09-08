@@ -77,6 +77,32 @@ final class TerminalPaneView: LocalProcessTerminalView {
         onCwdChange?(reportedCwd ?? directory)
     }
 
+    // MARK: - Appearance
+
+    /// Applies a theme and font. Replaces the xterm.js `theme`/`fontSize`/
+    /// `fontFamily` options passed to the `Terminal` constructor in
+    /// `TerminalPane.tsx`.
+    func applyAppearance(theme: TerminalTheme, fontFamily: String, fontSize: Double) {
+        let size = CGFloat(fontSize)
+        // An unset or unresolvable family must not be fatal: the Electron build's
+        // DEFAULT_FONT_FAMILY stack existed for Unicode coverage, and the system
+        // mono font is the native equivalent.
+        font = NSFont(name: fontFamily, size: size)
+            ?? NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+
+        installColors(theme.ansi.map { color in
+            let (r, g, b) = color.rgb8
+            return SwiftTerm.Color(red8: r, green8: g, blue8: b)
+        })
+
+        nativeBackgroundColor = theme.background
+        nativeForegroundColor = theme.foreground
+        caretColor = theme.cursor
+        selectedTextBackgroundColor = theme.selection
+
+        needsDisplay = true
+    }
+
     // MARK: - Output tap
 
     override func dataReceived(slice: ArraySlice<UInt8>) {

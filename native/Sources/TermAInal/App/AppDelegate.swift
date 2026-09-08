@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mcpServer: MCPServer?
     /// Held while the sheet is up; released when it closes.
     private var palette: AIPaletteController?
+    private var settingsController: SettingsWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         SettingsStore.shared.load()
@@ -18,7 +19,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         buildWindow()
         buildMenu()
-        startMcpServerIfEnabled()
+        restartMcpServer()
 
         panes.onActivePaneChange = { [weak self] paneId in
             self?.mcpServer?.activePaneChanged(to: paneId)
@@ -74,7 +75,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - MCP
 
-    private func startMcpServerIfEnabled() {
+    /// Stops any running server and starts a fresh one if enabled.
+    ///
+    /// `MCPServer` is immutable per port, so a port or feature change means a
+    /// new instance — this is what `applyMcpSettings` did in `main.ts`.
+    private func restartMcpServer() {
+        mcpServer?.stop()
+        mcpServer = nil
+
         let settings = SettingsStore.shared.settings
         guard settings.mcpEnabled else { return }
 
@@ -208,10 +216,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openSettings() {
-        let alert = NSAlert()
-        alert.messageText = "Settings not yet ported"
-        alert.informativeText = "Settings are read from settings.json. The preferences UI is still on the Electron side — see MIGRATION.md."
-        alert.runModal()
+        if let existing = settingsController {
+            existing.window?.makeKeyAndOrderFront(nil)
+            return
+        }
+        let controller = SettingsWindowController()
+        controller.onSave = { [weak self] _ in
+            self?.applyChangedSettings()
+        }
+        settingsController = controller
+        controller.showWindow(nil)
+        controller.window?.makeKeyAndOrderFront(nil)
+    }
+
+    /// Re-applies everything that reads settings at runtime. Font and theme go
+    /// straight to the live panes; the MCP server has to be rebuilt because its
+    /// port and feature set are fixed at construction.
+    private func applyChangedSettings() {
+        applyBufferSettings()
+        panes.applyAppearanceToAll()
+        restartMcpServer()
+        settingsController = nil
     }
 
     @objc private func openAIPalette() {

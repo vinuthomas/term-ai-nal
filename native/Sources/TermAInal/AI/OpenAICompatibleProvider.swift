@@ -25,24 +25,127 @@ struct OpenAICompatibleProvider: AIProvider {
 
     // MARK: - AIProvider
     //
-    // Unlike AppleIntelligenceProvider, there is no schema enforcement here, so
-    // these keep the original strict-format prompts and the matching parsers:
-    // the response shape is a request, not a guarantee.
+    /// Whether this endpoint can constrain output to a JSON schema, closing the
+    /// gap with `AppleIntelligenceProvider`'s guided generation.
+    ///
+    /// Without it the format is a *request*: a 1.5B model asked in prose for no
+    /// backticks still returned ``\`ls -u | sort -u\``` — which is exactly the
+    /// class of breakage the Electron parser lived with.
+    private var schemaSupport: SchemaSupport {
+        switch flavor {
+        case .ollama: return .ollamaFormat
+        case .openai: return .openAIResponseFormat
+        case .perplexity: return .none
+        }
+    }
+
+    private enum SchemaSupport {
+        case ollamaFormat
+        case openAIResponseFormat
+        case none
+    }
 
     func suggestCommand(request: String, cwd: String?) async throws -> CommandSuggestion {
+        let constrained = schemaSupport
         let text = try await complete(
-            system: AIPrompts.commandPreamble() + AIPrompts.strictCommandFormat(),
-            user: AIPrompts.commandUserPrompt(request: request, cwd: cwd)
+            system: AIPrompts.commandPreamble()
+                + (constrained == .none ? AIPrompts.strictCommandFormat() : ""),
+            user: AIPrompts.commandUserPrompt(request: request, cwd: cwd),
+            schema: constrained == .none ? nil : Self.commandSchema
         )
-        return try Self.parseCommand(text)
+        return constrained == .none ? try Self.parseCommand(text) : try Self.decodeCommand(text)
     }
 
     func plan(goal: String, cwd: String) async throws -> [PlanStep] {
+        let constrained = schemaSupport
         let text = try await complete(
-            system: AIPrompts.planPreamble() + AIPrompts.strictPlanFormat(),
-            user: AIPrompts.planUserPrompt(goal: goal, cwd: cwd)
+            system: AIPrompts.planPreamble()
+                + (constrained == .none ? AIPrompts.strictPlanFormat() : ""),
+            user: AIPrompts.planUserPrompt(goal: goal, cwd: cwd),
+            schema: constrained == .none ? nil : Self.planSchema
         )
-        return try Self.parsePlan(text)
+        return constrained == .none ? try Self.parsePlan(text) : try Self.decodePlan(text)
+    }
+
+    // MARK: - JSON schemas
+
+    private static let commandSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "command": ["type": "string", "description": "The raw executable shell command, no markdown or backticks"],
+            "explanation": ["type": "string", "description": "A concise explanation, at most 10 words"],
+        ],
+        "required": ["command", "explanation"],
+        "additionalProperties": false,
+    ]
+
+    private static let planSchema: [String: Any] = [
+        "type": "object",
+        "properties": [
+            "steps": [
+                "type": "array",
+                "maxItems": AIPrompts.maxPlanSteps,
+                "items": [
+                    "type": "object",
+                    "properties": [
+                        "cmd": ["type": "string", "description": "The raw shell command, no markdown or backticks"],
+                        "explanation": ["type": "string", "description": "What this step does, at most 10 words"],
+                    ],
+                    "required": ["cmd", "explanation"],
+                    "additionalProperties": false,
+                ],
+            ],
+        ],
+        "required": ["steps"],
+        "additionalProperties": false,
+    ]
+
+    private struct SchemaCommand: Decodable {
+        let command: String
+        let explanation: String
+    }
+
+    private struct SchemaPlan: Decodable {
+        struct Step: Decodable {
+            let cmd: String
+            let explanation: String
+        }
+        let steps: [Step]
+    }
+
+    private static func decodeCommand(_ text: String) throws -> CommandSuggestion {
+        guard let data = stripCodeFence(text).data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(SchemaCommand.self, from: data) else {
+            // Fall back to the prose parser: a schema is a strong constraint,
+            // not a proof, and some servers ignore the field entirely.
+            return try parseCommand(text)
+        }
+        return CommandSuggestion(
+            command: cleanCommand(decoded.command),
+            explanation: decoded.explanation.trimmingCharacters(in: .whitespacesAndNewlines)
+        )
+    }
+
+    private static func decodePlan(_ text: String) throws -> [PlanStep] {
+        guard let data = stripCodeFence(text).data(using: .utf8),
+              let decoded = try? JSONDecoder().decode(SchemaPlan.self, from: data) else {
+            return try parsePlan(text)
+        }
+        let steps = decoded.steps
+            .map { PlanStep(cmd: cleanCommand($0.cmd), explanation: $0.explanation.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            .filter { !$0.cmd.isEmpty }
+        guard !steps.isEmpty else {
+            throw AIError.badResponse("Plan response contained no steps")
+        }
+        return Array(steps.prefix(AIPrompts.maxPlanSteps))
+    }
+
+    /// Strips wrapping backticks a model may still put *inside* a string value.
+    static func cleanCommand(_ command: String) -> String {
+        var trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        while trimmed.hasPrefix("`") { trimmed.removeFirst() }
+        while trimmed.hasSuffix("`") { trimmed.removeLast() }
+        return trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     // MARK: - Parsing
@@ -62,7 +165,7 @@ struct OpenAICompatibleProvider: AIProvider {
         guard let command, !command.isEmpty else {
             throw AIError.badResponse("Response did not contain a COMMAND: line")
         }
-        return CommandSuggestion(command: command, explanation: explanation)
+        return CommandSuggestion(command: cleanCommand(command), explanation: explanation)
     }
 
     /// Equivalent of the `JSON.parse` validation in `callAIPlan`, plus a fence
@@ -108,7 +211,7 @@ struct OpenAICompatibleProvider: AIProvider {
 
     // MARK: - Transport
 
-    private func complete(system: String, user: String) async throws -> String {
+    private func complete(system: String, user: String, schema: [String: Any]? = nil) async throws -> String {
         var request = URLRequest(url: try endpoint())
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -131,6 +234,20 @@ struct OpenAICompatibleProvider: AIProvider {
         ]
         if flavor == .ollama {
             body["stream"] = false
+        }
+        if let schema {
+            switch schemaSupport {
+            case .ollamaFormat:
+                body["format"] = schema
+            case .openAIResponseFormat:
+                // Unverified — needs a real key to exercise.
+                body["response_format"] = [
+                    "type": "json_schema",
+                    "json_schema": ["name": "shell_response", "strict": true, "schema": schema],
+                ]
+            case .none:
+                break
+            }
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 

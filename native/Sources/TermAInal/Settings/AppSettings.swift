@@ -48,8 +48,9 @@ struct AppSettings: Codable {
     var theme: String = "default"
     var restoreSession: Bool = false
 
-    // TODO: iTerm theme import (`parseItermTheme`) is not yet ported, so the
-    // `customTheme` / `customThemeName` keys are intentionally omitted.
+    // iTerm theme import (`parseItermTheme`) is dropped by decision, so the
+    // `customTheme` / `customThemeName` keys are intentionally omitted. Built-in
+    // themes only — see TerminalThemes.
 
     var mcpEnabled: Bool = true
     var mcpPort: Int = 57320
@@ -96,23 +97,54 @@ final class SettingsStore {
 
     private init() {}
 
-    var settingsURL: URL {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    private var supportDirectory: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
-        let dir = support.appendingPathComponent("term-ai-nal", isDirectory: true)
+    }
+
+    /// Deliberately *not* `term-ai-nal/`.
+    ///
+    /// That directory is the live Electron app's `userData`, holding its own
+    /// `settings.json` and `session.json`. `save()` writes only the keys this
+    /// struct knows about, so sharing the file would silently strip `apiKey`,
+    /// `customTheme` and `customThemeName` and break the shipping app. The two
+    /// stay separate until Electron is retired.
+    var settingsURL: URL {
+        let dir = supportDirectory.appendingPathComponent("term-ai-nal-native", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("settings.json")
     }
 
+    /// The Electron app's settings file. Read once, never written.
+    private var electronSettingsURL: URL {
+        supportDirectory
+            .appendingPathComponent("term-ai-nal", isDirectory: true)
+            .appendingPathComponent("settings.json")
+    }
+
     /// Any failure — missing file, unreadable, malformed JSON — yields defaults
     /// rather than throwing, so a corrupt file can never block startup.
+    ///
+    /// On first run the Electron config is imported so provider, model, theme
+    /// and MCP preferences carry over. Tolerant decoding drops the keys this
+    /// build does not have (`customTheme`, `apiKey`) without complaint; the
+    /// original file is left untouched.
     func load() {
-        guard let data = try? Data(contentsOf: settingsURL),
-              let decoded = try? JSONDecoder().decode(AppSettings.self, from: data) else {
-            settings = .defaults
+        if let decoded = decode(from: settingsURL) {
+            settings = decoded
             return
         }
-        settings = decoded
+        if let imported = decode(from: electronSettingsURL) {
+            settings = imported
+            save(imported)
+            return
+        }
+        settings = .defaults
+    }
+
+    private func decode(from url: URL) -> AppSettings? {
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(AppSettings.self, from: data)
     }
 
     @discardableResult

@@ -99,6 +99,26 @@ final class PaneController {
         onActivePaneChange?(paneId)
     }
 
+    // MARK: - Appearance
+
+    /// Re-reads settings and pushes appearance to every live pane. Called after
+    /// the settings UI commits a change; the Electron build achieved this by
+    /// re-rendering `TerminalPane` with new xterm.js options.
+    func applyAppearanceToAll() {
+        for terminal in terminals.values {
+            applyAppearance(to: terminal)
+        }
+    }
+
+    private func applyAppearance(to terminal: TerminalPaneView) {
+        let settings = SettingsStore.shared.settings
+        terminal.applyAppearance(
+            theme: TerminalThemes.theme(forKey: settings.theme),
+            fontFamily: settings.fontFamily,
+            fontSize: settings.fontSize
+        )
+    }
+
     // MARK: - View construction
 
     /// Rebuilds the split hierarchy, reusing existing terminal views.
@@ -179,6 +199,7 @@ final class PaneController {
             }
         }
         terminals[paneId] = terminal
+        applyAppearance(to: terminal)
         terminal.start(cwd: node.cwd)
         return terminal
     }
